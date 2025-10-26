@@ -62,12 +62,26 @@
 // 对于一些需要 "值" 的 token，可以在前面加上 <type> 来指定值的类型
 // 例如，%token <int> INT_CONST 定义了一个名为 INT_CONST
 %token <int> INT_CONST
+%token <float> FLOAT_CONST
+%token <long long> LL_CONST
 %token <std::string> STR_CONST ERR_TOKEN SLASH_COMMENT
 
 %token <std::string> IDENT 
 
-%token IF ELSE FOR WHILE CONTINUE BREAK SWITCH CASE GOTO DO RETURN CONST
+%token IF ELSE FOR WHILE CONTINUE BREAK SWITCH CASE GOTO DO RETURN 
+%token CONST INT FLOAT
 %token SEMICOLON COMMA LPAREN RPAREN LBRACKET RBRACKET LBRACE RBRACE
+
+/* 新增：运算符 */
+%token ASSIGN      /* = */
+%token PLUS MINUS STAR SLASH PERCENT
+%token EQ NE LT GT LE GE
+%token AND OR NOT
+%token BAND BOR BXOR BNOT
+%token SHL SHR
+%token INC DEC
+%token PLUSEQ MINUSEQ MULTEQ DIVEQ MODEQ
+
 %token END
 
 %nterm <FE::AST::Operator> UNARY_OP

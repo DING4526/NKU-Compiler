@@ -1,0 +1,26 @@
+Token                         Lexeme                        Property                      Line    Column  
+IDENT                         f                             f                             2       0       
+ASSIGN                        =                                                           2       2       
+IDENT                         g                             g                             2       4       
+SLASH                         /                                                           2       9       
+IDENT                         h                             h                             2       10      
+SEMICOLON                     ;                                                           2       11      
+IDENT                         l                             l                             3       7       
+LPAREN                        (                                                           3       8       
+RPAREN                        )                                                           3       9       
+SEMICOLON                     ;                                                           3       10      
+IDENT                         m                             m                             4       0       
+ASSIGN                        =                                                           4       2       
+IDENT                         n                             n                             4       4       
+PLUS                          +                                                           5       0       
+IDENT                         p                             p                             5       2       
+SEMICOLON                     ;                                                           5       3       
+IDENT                         a                             a                             6       14      
+ASSIGN                        =                                                           6       16      
+IDENT                         b                             b                             6       18      
+PLUS                          +                                                           6       20      
+IDENT                         c                             c                             6       22      
+STAR                          *                                                           6       24      
+IDENT                         d                             d                             6       26      
+SLASH                         /                                                           6       28      
+IDENT                         e                             e                             6       30      

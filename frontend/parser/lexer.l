@@ -39,7 +39,7 @@
 %option yyclass="Scanner"
 %option prefix="Yacc_"
 
-%%
+%x COMMENT
 
 %{
 /*
@@ -52,15 +52,62 @@ TODO(Lab1)：参考SysY2022的定义，实现更多的词法，如浮点数、�
 */
 %}
 
-\n              {
-                    loc.lines(yyleng);
-                    loc.step();
-                }
+/* ========= 命名正则（Definitions） ========= */
 
-[ \f\r\v]+    { /* empty */ }
-[\t]    {
-    loc.columns(handleTab());
-}
+/* ===== 基本字符类 ===== */
+DIGIT        [0-9]
+NZDIG        [1-9]
+OCTDIG       [0-7]
+HEXDIG       [0-9A-Fa-f]
+IDSTART      [A-Za-z_]
+IDCONT       [A-Za-z0-9_]
+
+/* ===== 复合词法单元 ===== */
+ID           {IDSTART}{IDCONT}*
+WS           [ \f\r\v]+
+SL_COMMENT   "//"[^\n]*
+
+/* ===== 整型常量（含后缀） ===== */
+INTSUF       ([uU]([lL]{1,2})?|([lL]{1,2})[uU]?)     
+DECINT       ({NZDIG}{DIGIT}*{INTSUF}?)      
+OCTINT       (0{OCTDIG}*{INTSUF}?)          
+HEXINT       (0[xX]{HEXDIG}+{INTSUF}?)       
+
+/* ===== 浮点常量（含后缀） ===== */
+/* 指数部分 */
+EXP          [eE][+-]?{DIGIT}+           
+BEXP         [pP][+-]?{DIGIT}+           
+FLSUFF       [fFlL]                        
+
+/* 十进制小数三种形态 */
+DFRAC1       ({DIGIT}+\.{DIGIT}+)            
+DFRAC2       ({DIGIT}+\.)                  
+DFRAC3       (\.{DIGIT}+)                  
+/* 十进制浮点主体：小数部分（可带指数）或 整数+指数 */
+DECFLTBODY   ({DFRAC1}|{DFRAC2}|{DFRAC3})({EXP})?|{DIGIT}+{EXP}
+DECFLT       ({DECFLTBODY}{FLSUFF}?)          
+
+/* 十六进制小数三种形态 */
+HXFRAC1      (0[xX]{HEXDIG}+\.{HEXDIG}*)
+HXFRAC2      (0[xX]{HEXDIG}*\.{HEXDIG}+)
+HXINTHEX     (0[xX]{HEXDIG}+)
+/* 十六进制浮点主体：小数+指数 或 整数+指数 */
+HEXFLTBODY   ({HXFRAC1}|{HXFRAC2}){BEXP}|{HXINTHEX}{BEXP}
+HEXFLT       ({HEXFLTBODY}{FLSUFF}?)          
+
+/* ===== 字符串（含转义） ===== */
+STRING       \"([^\"\\]|\\.)*\"
+
+
+
+%%
+
+
+
+\n      { loc.lines(yyleng); loc.step(); }
+{WS}    { /* empty */ }
+[\t]    { loc.columns(handleTab()); }
+
 
 "if"                { RETT(IF, loc) }
 "else"              { RETT(ELSE, loc) }
@@ -73,51 +120,151 @@ TODO(Lab1)：参考SysY2022的定义，实现更多的词法，如浮点数、�
 "goto"              { RETT(GOTO, loc) }
 "do"                { RETT(DO, loc) }
 "return"            { RETT(RETURN, loc) }
-
 "const"             { RETT(CONST, loc) }
+"int"               { RETT(INT, loc) }
+"float"             { RETT(FLOAT, loc) }
+
 
 ";"                 { RETT(SEMICOLON, loc) }
 ","                 { RETT(COMMA, loc) }
-
-"//".*              { 
-    auto str = std::string(yytext);
-    // return YaccParser::make_SLASH_COMMENT(str, loc);  //思考为什么要把这一行注释掉
-}
-
-"/*""*/" {
-    //TODO(Lab1)：实现多行注释的处理，包括修改上方的匹配规则
-}
-
-[A-Za-z_]+[A-Za-z0-9_]* {
-    auto str = std::string(yytext);
-    return YaccParser::make_IDENT(str, loc); 
-}
-
-\"[^\"]*\"          { 
-    std::string str(yytext);
-    if (!str.empty()) str = str.substr(1, str.size() - 2);
-    return YaccParser::make_STR_CONST(str, loc); 
-}
-
-[1-9][0-9]* {
-    try {
-        bool isLL = false;
-        long long result = convertToInt(yytext, '\0', isLL);
-        // if (isLL) return YaccParser::make_LL_CONST(result, loc);
-        return YaccParser::make_INT_CONST(static_cast<int>(result), loc);
-    } catch (const std::exception& e) {
-        _parser.reportError(loc, std::string("Error parsing hexadecimal int: ") + e.what());
-        auto str = std::string(yytext);
-        return YaccParser::make_ERR_TOKEN(str, loc);
-    }
-}
-
 "("                 { RETT(LPAREN, loc) }
 ")"                 { RETT(RPAREN, loc) }
 "["                 { RETT(LBRACKET, loc) }
 "]"                 { RETT(RBRACKET, loc) }
 "{"                 { RETT(LBRACE, loc) }
 "}"                 { RETT(RBRACE, loc) }
+
+
+{SL_COMMENT}              { 
+    auto str = std::string(yytext);
+    // return YaccParser::make_SLASH_COMMENT(str, loc);  //思考为什么要把这一行注释掉
+}
+
+
+"/*"                { BEGIN(COMMENT); }
+<COMMENT>{
+    "*/"            { BEGIN(INITIAL); }
+    \n              { loc.lines(1); loc.step(); }
+    [^*\n]+         { /* eat content */ }
+    \*+[^/\n]*      { /* a run of * not followed by / */ }
+    <<EOF>>         {
+                        // 未闭合多行注释：报错并结束为 ERR_TOKEN
+                        std::string msg = "unterminated block comment";
+                        return YaccParser::make_ERR_TOKEN(msg, loc);
+                    }
+}
+
+{ID} {
+    auto str = std::string(yytext);
+    return YaccParser::make_IDENT(str, loc); 
+}
+
+{STRING}          { 
+    std::string str(yytext);
+    if (!str.empty()) str = str.substr(1, str.size() - 2);
+    return YaccParser::make_STR_CONST(str, loc); 
+}
+
+
+{HEXFLT} {
+    try {
+        std::string s(yytext, yyleng);
+        if (!s.empty()) {
+            char c = s.back();
+            if (c=='f'||c=='F'||c=='l'||c=='L') s.pop_back(); 
+        }
+        float v = convertToFloatHex(s.c_str());
+        return YaccParser::make_FLOAT_CONST(v, loc);
+    } catch (...) {
+        return YaccParser::make_ERR_TOKEN(std::string(yytext), loc);
+    }
+}
+
+{DECFLT} {
+    try {
+        std::string s(yytext, yyleng);
+        if (!s.empty()) {
+            char c = s.back();
+            if (c=='f'||c=='F'||c=='l'||c=='L') s.pop_back();
+        }
+        float v = convertToFloatDec(s.c_str());
+        return YaccParser::make_FLOAT_CONST(v, loc);
+    } catch (...) {
+        return YaccParser::make_ERR_TOKEN(std::string(yytext), loc);
+    }
+}
+
+{HEXINT} {
+    try {
+        bool isLL=false;
+        long long val=convertToInt(yytext,'\0',isLL);
+        if(isLL) return YaccParser::make_LL_CONST(val, loc);
+        return YaccParser::make_INT_CONST(static_cast<int>(val), loc);
+    } catch (...) {
+        return YaccParser::make_ERR_TOKEN(std::string(yytext), loc);
+    }
+}
+
+{OCTINT} {
+    try {
+        bool isLL=false;
+        long long val=convertToInt(yytext,'\0',isLL);
+        if(isLL) return YaccParser::make_LL_CONST(val, loc);
+        return YaccParser::make_INT_CONST(static_cast<int>(val), loc);
+    } catch (...) {
+        return YaccParser::make_ERR_TOKEN(std::string(yytext), loc);
+    }
+}
+
+{DECINT} {
+    try {
+        bool isLL=false;
+        long long val=convertToInt(yytext,'\0',isLL);
+        if(isLL) return YaccParser::make_LL_CONST(val, loc);
+        return YaccParser::make_INT_CONST(static_cast<int>(val), loc);
+    } catch (...) {
+        return YaccParser::make_ERR_TOKEN(std::string(yytext), loc);
+    }
+}
+
+
+
+"=="                { RETT(EQ, loc); }
+"!="                { RETT(NE, loc); }
+"<="                { RETT(LE, loc); }
+">="                { RETT(GE, loc); }
+"&&"                { RETT(AND, loc); }
+"||"                { RETT(OR, loc); }
+"<<"                { RETT(SHL, loc); }
+">>"                { RETT(SHR, loc); }
+"++"                { RETT(INC, loc); }
+"--"                { RETT(DEC, loc); }
+"+="                { RETT(PLUSEQ, loc); }
+"-="                { RETT(MINUSEQ, loc); }
+"*="                { RETT(MULTEQ, loc); }
+"/="                { RETT(DIVEQ, loc); }
+"%="                { RETT(MODEQ, loc); }
+
+"="                 { RETT(ASSIGN, loc); }
+"+"                 { RETT(PLUS, loc); }
+"-"                 { RETT(MINUS, loc); }
+"*"                 { RETT(STAR, loc); }
+"/"                 { RETT(SLASH, loc); }
+"%"                 { RETT(PERCENT, loc); }
+"<"                 { RETT(LT, loc); }
+">"                 { RETT(GT, loc); }
+"!"                 { RETT(NOT, loc); }
+"&"                 { RETT(BAND, loc); }
+"|"                 { RETT(BOR, loc); }
+"^"                 { RETT(BXOR, loc); }
+"~"                 { RETT(BNOT, loc); }
+
+
+. {
+    std::string s = std::string(yytext);
+    return YaccParser::make_ERR_TOKEN(s, loc);
+}
+
 
 <<EOF>>         { RETT(END, loc); }
 
