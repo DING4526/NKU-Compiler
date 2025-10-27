@@ -4,3 +4,5 @@ f = g/**//h;               // equivalent to f = g / h;
 m = n//**/o 
 + p;                       // equivalent to m = n + p;
 /* comment */ a = b + c * d / e  // equivalent to a = b + c * d / e
+
+a = /* ***/1

@@ -141,18 +141,16 @@ STRING       \"([^\"\\]|\\.)*\"
 }
 
 
-"/*"                { BEGIN(COMMENT); }
-<COMMENT>{
-    "*/"            { BEGIN(INITIAL); }
-    \n              { loc.lines(1); loc.step(); }
-    [^*\n]+         { /* eat content */ }
-    \*+[^/\n]*      { /* a run of * not followed by / */ }
-    <<EOF>>         {
-                        // 未闭合多行注释：报错并结束为 ERR_TOKEN
-                        std::string msg = "unterminated block comment";
-                        return YaccParser::make_ERR_TOKEN(msg, loc);
-                    }
+"/*"            { BEGIN(COMMENT); }
+
+<COMMENT>"*/"   { BEGIN(INITIAL); }
+<COMMENT>\n     { loc.lines(1); loc.step(); }
+<COMMENT>.      { /* 吃一个非换行字符 */ }
+<COMMENT><<EOF>> {
+    std::string msg = "unterminated block comment";
+    return YaccParser::make_ERR_TOKEN(msg, loc);
 }
+
 
 {ID} {
     auto str = std::string(yytext);
@@ -194,34 +192,31 @@ STRING       \"([^\"\\]|\\.)*\"
     }
 }
 
-{HEXINT} {
+({HEXINT}|{OCTINT}|{DECINT}) {
     try {
-        bool isLL=false;
-        long long val=convertToInt(yytext,'\0',isLL);
-        if(isLL) return YaccParser::make_LL_CONST(val, loc);
-        return YaccParser::make_INT_CONST(static_cast<int>(val), loc);
-    } catch (...) {
-        return YaccParser::make_ERR_TOKEN(std::string(yytext), loc);
-    }
-}
+        // 先剥后缀：U/u 与 L/l 或 LL/ll
+        std::string s(yytext, yyleng);
+        bool hasU = false;
+        (void)hasU;
+        int  Ls   = 0;  // 0/1/2
+        while (!s.empty()) {
+            char c = s.back();
+            if (c=='u'||c=='U') { hasU = true; s.pop_back(); }
+            else if (c=='l'||c=='L') {
+                s.pop_back(); ++Ls;
+                if (!s.empty() && (s.back()=='l'||s.back()=='L')) { s.pop_back(); ++Ls; }
+            } else break;
+        }
 
-{OCTINT} {
-    try {
-        bool isLL=false;
-        long long val=convertToInt(yytext,'\0',isLL);
-        if(isLL) return YaccParser::make_LL_CONST(val, loc);
-        return YaccParser::make_INT_CONST(static_cast<int>(val), loc);
-    } catch (...) {
-        return YaccParser::make_ERR_TOKEN(std::string(yytext), loc);
-    }
-}
+        // 解析数值（自动识别 0x/前导0 的进制）
+        bool isLL = false;
+        long long val = convertToInt(s.c_str(), '\0', isLL);
 
-{DECINT} {
-    try {
-        bool isLL=false;
-        long long val=convertToInt(yytext,'\0',isLL);
-        if(isLL) return YaccParser::make_LL_CONST(val, loc);
-        return YaccParser::make_INT_CONST(static_cast<int>(val), loc);
+        // 合成 token：有 LL 后缀或超出 int 范围 --> LL_CONST
+        if (Ls >= 2 || isLL)
+            return YaccParser::make_LL_CONST(val, loc);
+        else
+            return YaccParser::make_INT_CONST(static_cast<int>(val), loc);
     } catch (...) {
         return YaccParser::make_ERR_TOKEN(std::string(yytext), loc);
     }

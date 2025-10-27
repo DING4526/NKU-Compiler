@@ -322,7 +322,7 @@ int main(int argc, char** argv)
         {
             // 由于 ARMV8 的后端尚未完成，此处暂时留空
             // 后续更新实验框架时会在飞书群内通知
-            TODO("Lab5: Impl ARMV8 Pipeline");
+            // TODO("Lab5: Impl ARMV8 Pipeline");
         }
 
         ret = 0;

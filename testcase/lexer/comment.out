@@ -24,3 +24,6 @@ STAR                          *                                                 
 IDENT                         d                             d                             6       26      
 SLASH                         /                                                           6       28      
 IDENT                         e                             e                             6       30      
+IDENT                         a                             a                             8       0       
+ASSIGN                        =                                                           8       2       
+INT_CONST                     1                             1                             8       11      
