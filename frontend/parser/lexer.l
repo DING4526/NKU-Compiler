@@ -123,7 +123,9 @@ STRING       \"([^\"\\]|\\.)*\"
 "const"             { RETT(CONST, loc) }
 "int"               { RETT(INT, loc) }
 "float"             { RETT(FLOAT, loc) }
-
+"bool"              { RETT(BOOL, loc) }
+"long long"         { RETT(LL, loc) }
+"void"              { RETT(VOID, loc) }
 
 ";"                 { RETT(SEMICOLON, loc) }
 ","                 { RETT(COMMA, loc) }
