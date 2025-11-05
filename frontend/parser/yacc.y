@@ -99,6 +99,7 @@
 %nterm <FE::AST::ExprNode*> FUNC_CALL_EXPR
 %nterm <FE::AST::ExprNode*> UNARY_EXPR
 %nterm <FE::AST::ExprNode*> MULDIV_EXPR
+%nterm <FE::AST::ExprNode*> MOD_EXPR
 %nterm <FE::AST::ExprNode*> ADDSUB_EXPR
 %nterm <FE::AST::ExprNode*> RELATIONAL_EXPR
 %nterm <FE::AST::ExprNode*> EQUALITY_EXPR
@@ -123,7 +124,6 @@
 %nterm <FE::AST::StmtNode*> BREAK_STMT
 %nterm <FE::AST::StmtNode*> CONTINUE_STMT
 %nterm <FE::AST::StmtNode*> FOR_STMT
-%nterm <FE::AST::StmtNode*> FUNC_BODY
 %nterm <FE::AST::StmtNode*> STMT
 
 %nterm <std::vector<FE::AST::StmtNode*>*> STMT_LIST
@@ -258,27 +258,8 @@ BLOCK_STMT:
     }
     ;
 
-FUNC_BODY:
-    LBRACE RBRACE {
-        $$ = nullptr;
-    }
-    | LBRACE STMT_LIST RBRACE {
-        if (!$2 || $2->empty())
-        {
-            $$ = nullptr;
-            delete $2;
-        }
-        else if ($2->size() == 1)
-        {
-            $$ = (*$2)[0];
-            delete $2;
-        }
-        else $$ = new BlockStmt($2, @1.begin.line, @1.begin.column);
-    }
-    ;
-
 FUNC_DECL_STMT:
-    TYPE IDENT LPAREN PARAM_DECLARATOR_LIST RPAREN FUNC_BODY {
+    TYPE IDENT LPAREN PARAM_DECLARATOR_LIST RPAREN BLOCK_STMT {
         Entry* entry = Entry::getEntry($2);
         $$ = new FuncDeclStmt($1, entry, $4, $6, @1.begin.line, @1.begin.column);
     }
@@ -521,14 +502,23 @@ RELATIONAL_EXPR:
 
 ADDSUB_EXPR:
     /* TODO(Lab2): Implement addition and subtraction expression rule */
+    MOD_EXPR {
+        $$ = $1;
+    }
+    | ADDSUB_EXPR PLUS MOD_EXPR {
+        $$ = new BinaryExpr(FE::AST::Operator::ADD, $1, $3, @1.begin.line, @1.begin.column);
+    }
+    | ADDSUB_EXPR MINUS MOD_EXPR {
+        $$ = new BinaryExpr(FE::AST::Operator::SUB, $1, $3, @1.begin.line, @1.begin.column);
+    }
+    ;
+
+MOD_EXPR:
     MULDIV_EXPR {
         $$ = $1;
     }
-    | ADDSUB_EXPR PLUS MULDIV_EXPR {
-        $$ = new BinaryExpr(FE::AST::Operator::ADD, $1, $3, @1.begin.line, @1.begin.column);
-    }
-    | ADDSUB_EXPR MINUS MULDIV_EXPR {
-        $$ = new BinaryExpr(FE::AST::Operator::SUB, $1, $3, @1.begin.line, @1.begin.column);
+    | MOD_EXPR PERCENT MULDIV_EXPR {
+        $$ = new BinaryExpr(FE::AST::Operator::MOD, $1, $3, @1.begin.line, @1.begin.column);
     }
     ;
 
