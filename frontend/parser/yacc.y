@@ -484,6 +484,7 @@ MULDIV_EXPR
   : UNARY_EXPR                          { $$ = $1; }
   | MULDIV_EXPR STAR    UNARY_EXPR      { $$ = new BinaryExpr(Operator::MUL, $1, $3, @2.begin.line, @2.begin.column); }
   | MULDIV_EXPR SLASH   UNARY_EXPR      { $$ = new BinaryExpr(Operator::DIV, $1, $3, @2.begin.line, @2.begin.column); }
+  | MULDIV_EXPR MOD     UNARY_EXPR      { $$ = new BinaryExpr(Operator::MOD, $1, $3, @2.begin.line, @2.begin.column); }
   ;
 
 UNARY_EXPR:
