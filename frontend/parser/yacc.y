@@ -99,7 +99,6 @@
 %nterm <FE::AST::ExprNode*> FUNC_CALL_EXPR
 %nterm <FE::AST::ExprNode*> UNARY_EXPR
 %nterm <FE::AST::ExprNode*> MULDIV_EXPR
-%nterm <FE::AST::ExprNode*> MOD_EXPR
 %nterm <FE::AST::ExprNode*> ADDSUB_EXPR
 %nterm <FE::AST::ExprNode*> RELATIONAL_EXPR
 %nterm <FE::AST::ExprNode*> EQUALITY_EXPR
@@ -476,14 +475,10 @@ RELATIONAL_EXPR
   ;
 
 ADDSUB_EXPR
-  : MOD_EXPR                         { $$ = $1; }
-  | ADDSUB_EXPR PLUS  MOD_EXPR       { $$ = new BinaryExpr(Operator::ADD, $1, $3, @2.begin.line, @2.begin.column); }
-  | ADDSUB_EXPR MINUS MOD_EXPR       { $$ = new BinaryExpr(Operator::SUB, $1, $3, @2.begin.line, @2.begin.column); }
+  : MULDIV_EXPR                         { $$ = $1; }
+  | ADDSUB_EXPR PLUS  MULDIV_EXPR       { $$ = new BinaryExpr(Operator::ADD, $1, $3, @2.begin.line, @2.begin.column); }
+  | ADDSUB_EXPR MINUS MULDIV_EXPR       { $$ = new BinaryExpr(Operator::SUB, $1, $3, @2.begin.line, @2.begin.column); }
   ;
-
-MOD_EXPR
-  : MULDIV_EXPR
-  | MOD_EXPR PERCENT MULDIV_EXPR     { $$ = new BinaryExpr(Operator::MOD, $1, $3, @2.begin.line, @2.begin.column); }
 
 MULDIV_EXPR
   : UNARY_EXPR                          { $$ = $1; }
