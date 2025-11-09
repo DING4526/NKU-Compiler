@@ -37,7 +37,12 @@
     X(BITAND, &, 14)            \
     X(AND, &&, 15)              \
     X(OR, ||, 16)               \
-    X(ASSIGN, =, 17)
+    X(ASSIGN, =, 17)            \
+    X(ADDEQ, +=, 18)            \
+    X(SUBEQ, -=, 19)            \
+    X(MULEQ, *= ,20)            \
+    X(DIVEQ, /=, 21)            \
+    X(MODEQ, %=, 22)            \
 
 namespace FE::AST
 {

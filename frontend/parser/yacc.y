@@ -387,27 +387,27 @@ ASSIGN_EXPR:
     }
     | LEFT_VAL_EXPR PLUSEQ NOCOMMA_EXPR {
         $$ = new BinaryExpr(Operator::ASSIGN, $1,
-            new BinaryExpr(Operator::ADD, $1, $3, @2.begin.line, @2.begin.column),
+            new BinaryExpr(Operator::ADDEQ, $1, $3, @2.begin.line, @2.begin.column),
             @2.begin.line, @2.begin.column);
     }
     | LEFT_VAL_EXPR MINUSEQ NOCOMMA_EXPR {
         $$ = new BinaryExpr(Operator::ASSIGN, $1,
-            new BinaryExpr(Operator::SUB, $1, $3, @2.begin.line, @2.begin.column),
+            new BinaryExpr(Operator::SUBEQ, $1, $3, @2.begin.line, @2.begin.column),
             @2.begin.line, @2.begin.column);
     }
     | LEFT_VAL_EXPR MULTEQ NOCOMMA_EXPR {
         $$ = new BinaryExpr(Operator::ASSIGN, $1,
-            new BinaryExpr(Operator::MUL, $1, $3, @2.begin.line, @2.begin.column),
+            new BinaryExpr(Operator::MULEQ, $1, $3, @2.begin.line, @2.begin.column),
             @2.begin.line, @2.begin.column);
     }
     | LEFT_VAL_EXPR DIVEQ NOCOMMA_EXPR {
         $$ = new BinaryExpr(Operator::ASSIGN, $1,
-            new BinaryExpr(Operator::DIV, $1, $3, @2.begin.line, @2.begin.column),
+            new BinaryExpr(Operator::DIVEQ, $1, $3, @2.begin.line, @2.begin.column),
             @2.begin.line, @2.begin.column);
     }
     | LEFT_VAL_EXPR MODEQ NOCOMMA_EXPR {
         $$ = new BinaryExpr(Operator::ASSIGN, $1,
-            new BinaryExpr(Operator::MOD, $1, $3, @2.begin.line, @2.begin.column),
+            new BinaryExpr(Operator::MODEQ, $1, $3, @2.begin.line, @2.begin.column),
             @2.begin.line, @2.begin.column);
     }
 ;
@@ -484,7 +484,7 @@ MULDIV_EXPR
   : UNARY_EXPR                          { $$ = $1; }
   | MULDIV_EXPR STAR    UNARY_EXPR      { $$ = new BinaryExpr(Operator::MUL, $1, $3, @2.begin.line, @2.begin.column); }
   | MULDIV_EXPR SLASH   UNARY_EXPR      { $$ = new BinaryExpr(Operator::DIV, $1, $3, @2.begin.line, @2.begin.column); }
-  | MULDIV_EXPR MOD     UNARY_EXPR      { $$ = new BinaryExpr(Operator::MOD, $1, $3, @2.begin.line, @2.begin.column); }
+  | MULDIV_EXPR PERCENT     UNARY_EXPR      { $$ = new BinaryExpr(Operator::MOD, $1, $3, @2.begin.line, @2.begin.column); }
   ;
 
 UNARY_EXPR:
