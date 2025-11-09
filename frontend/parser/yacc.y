@@ -289,11 +289,10 @@ PARAM_DECLARATOR:
         Entry* entry = Entry::getEntry($2);
         $$ = new ParamDeclarator($1, entry, dim, @1.begin.line, @1.begin.column);
     }
-    | TYPE IDENT LBRACKET NOCOMMA_EXPR RBRACKET {
-        auto dim = new std::vector<ExprNode*>();
-        dim->push_back($4);
+    | TYPE IDENT LBRACKET RBRACKET ARRAY_DIMENSION_EXPR_LIST{
+        $5->insert($5->begin(), new LiteralExpr(-1, @3.begin.line, @3.begin.column));
         Entry* entry = Entry::getEntry($2);
-        $$ = new ParamDeclarator($1, entry, dim, @1.begin.line, @1.begin.column);
+        $$ = new ParamDeclarator($1, entry, $5, @1.begin.line, @1.begin.column);
     }
     | TYPE IDENT ARRAY_DIMENSION_EXPR_LIST {
         Entry* entry = Entry::getEntry($2);
