@@ -79,7 +79,6 @@
 %token AND OR NOT
 %token BAND BOR BXOR BNOT
 %token SHL SHR
-%token INC DEC
 %token PLUSEQ MINUSEQ MULTEQ DIVEQ MODEQ
 
 %token END

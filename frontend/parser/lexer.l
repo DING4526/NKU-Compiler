@@ -234,8 +234,6 @@ STRING       \"([^\"\\]|\\.)*\"
 "||"                { RETT(OR, loc); }
 "<<"                { RETT(SHL, loc); }
 ">>"                { RETT(SHR, loc); }
-"++"                { RETT(INC, loc); }
-"--"                { RETT(DEC, loc); }
 "+="                { RETT(PLUSEQ, loc); }
 "-="                { RETT(MINUSEQ, loc); }
 "*="                { RETT(MULTEQ, loc); }
