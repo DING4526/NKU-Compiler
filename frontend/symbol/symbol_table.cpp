@@ -3,26 +3,60 @@
 
 namespace FE::Sym
 {
-    void SymTable::reset_impl() { TODO("Lab3-1: Reset symbol table"); }
+    using emap_t = std::map<Entry*, FE::AST::VarAttr*>;
+    void SymTable::reset_impl() {
+        for(auto x : TableList) {
+            for(auto y : *x) {
+                if(y.second) delete y.second;
+            }
+            x->clear();
+            delete x;
+        }
+        latTable = nullptr;
+        if(curTable) curTable->clear();
+        else curTable = new emap_t;
+        TableList.clear();
+    }
 
-    void SymTable::enterScope_impl() { TODO("Lab3-1: Enter new scope"); }
+    void SymTable::enterScope_impl() {
+        TableList.emplace_back(new emap_t());
+        latTable = TableList.back();
+    }
 
-    void SymTable::exitScope_impl() { TODO("Lab3-1: Exit current scope"); }
+    void SymTable::exitScope_impl() {
+        for(auto x : *latTable) {
+            delete (*curTable)[x.first];
+            if(!x.second) {
+                (*curTable).erase(x.first);
+            } else {
+                (*curTable)[x.first] = x.second;
+            }
+        }
+        latTable->clear();
+        delete latTable;
+        TableList.pop_back();
+        latTable = TableList.back();
+    }
 
-    void SymTable::addSymbol_impl(Entry* entry, FE::AST::VarAttr& attr)
-    {
-        (void)entry;
-        (void)attr;
-        TODO("Lab3-1: Add symbol to current scope");
+    void SymTable::addSymbol_impl(Entry* entry, FE::AST::VarAttr* attr){
+        if(curTable->count(entry)) {
+            (*latTable)[entry] = (*curTable)[entry];
+        } else (*latTable)[entry] = nullptr;
+        (*curTable)[entry] = attr;
     }
 
     FE::AST::VarAttr* SymTable::getSymbol_impl(Entry* entry)
     {
-        (void)entry;
-        TODO("Lab3-1: Get symbol from symbol table");
+        if(curTable->count(entry))
+            return (*curTable)[entry];
+        else return nullptr;
     }
 
-    bool SymTable::isGlobalScope_impl() { TODO("Lab3-1: Check if current scope is global scope"); }
+    bool SymTable::isGlobalScope_impl() {
+        return TableList.size() <= 1;
+    }
 
-    int SymTable::getScopeDepth_impl() { TODO("Lab3-1: Get current scope depth"); }
+    int SymTable::getScopeDepth_impl() {
+        return TableList.size();
+    }
 }  // namespace FE::Sym

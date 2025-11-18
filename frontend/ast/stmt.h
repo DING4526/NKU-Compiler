@@ -1,6 +1,7 @@
 #ifndef __FRONTEND_AST_STMT_H__
 #define __FRONTEND_AST_STMT_H__
 
+#include "frontend/ast/ast_defs.h"
 #include <frontend/ast/ast.h>
 #include <frontend/ast/decl.h>
 /*
@@ -17,6 +18,7 @@ namespace FE::AST
 
         virtual void accept(Visitor& visitor) override = 0;
         virtual bool isVarDeclStmt()                   = 0;
+        virtual StmtType getStmtType()                 = 0;
     };
 
     // 表达式语句，如 a = b + 3;
@@ -31,6 +33,7 @@ namespace FE::AST
 
         virtual void accept(Visitor& visitor) override { visitor.visit(*this); }
         virtual bool isVarDeclStmt() override { return false; }
+        virtual StmtType getStmtType() override { return StmtType::EXPRSTMT; }
     };
 
     class ParamDeclarator;
@@ -52,6 +55,7 @@ namespace FE::AST
 
         virtual void accept(Visitor& visitor) override { visitor.visit(*this); }
         virtual bool isVarDeclStmt() override { return false; }
+        virtual StmtType getStmtType() override { return StmtType::FUNCDECLSTMT; }
     };
 
     class VarDeclarator;
@@ -68,6 +72,7 @@ namespace FE::AST
 
         virtual void accept(Visitor& visitor) override { visitor.visit(*this); }
         virtual bool isVarDeclStmt() override { return true; }
+        virtual StmtType getStmtType() override { return StmtType::VARDECLSTMT; }
     };
 
     // 复合语句，如 { ... }，其内部可以包含多条语句
@@ -84,6 +89,7 @@ namespace FE::AST
 
         virtual void accept(Visitor& visitor) override { visitor.visit(*this); }
         virtual bool isVarDeclStmt() override { return false; }
+        virtual StmtType getStmtType() override { return StmtType::BLOCKSTMT; }
     };
 
     // 返回语句，如 return a + 1;
@@ -100,6 +106,7 @@ namespace FE::AST
 
         virtual void accept(Visitor& visitor) override { visitor.visit(*this); }
         virtual bool isVarDeclStmt() override { return false; }
+        virtual StmtType getStmtType() override { return StmtType::RETURNSTMT; }
     };
 
     // while 语句，如 while (cond) { ... }
@@ -118,6 +125,7 @@ namespace FE::AST
 
         virtual void accept(Visitor& visitor) override { visitor.visit(*this); }
         virtual bool isVarDeclStmt() override { return false; }
+        virtual StmtType getStmtType() override { return StmtType::WHILESTMT; }
     };
 
     // if 语句，如 if (cond) { ... } else { ... }
@@ -138,6 +146,7 @@ namespace FE::AST
 
         virtual void accept(Visitor& visitor) override { visitor.visit(*this); }
         virtual bool isVarDeclStmt() override { return false; }
+        virtual StmtType getStmtType() override { return StmtType::IFSTMT; }
     };
 
     class BreakStmt : public StmtNode
@@ -148,6 +157,7 @@ namespace FE::AST
 
         virtual void accept(Visitor& visitor) override { visitor.visit(*this); }
         virtual bool isVarDeclStmt() override { return false; }
+        virtual StmtType getStmtType() override { return StmtType::BREAKSTMT; }
     };
 
     class ContinueStmt : public StmtNode
@@ -158,6 +168,7 @@ namespace FE::AST
 
         virtual void accept(Visitor& visitor) override { visitor.visit(*this); }
         virtual bool isVarDeclStmt() override { return false; }
+        virtual StmtType getStmtType() override { return StmtType::CONTINUESTMT; }
     };
 
     // for 语句，如 for (init; cond; step) { ... }
@@ -180,6 +191,7 @@ namespace FE::AST
 
         virtual void accept(Visitor& visitor) override { visitor.visit(*this); }
         virtual bool isVarDeclStmt() override { return false; }
+        virtual StmtType getStmtType() override { return StmtType::FORSTMT; }
     };
 
 }  // namespace FE::AST

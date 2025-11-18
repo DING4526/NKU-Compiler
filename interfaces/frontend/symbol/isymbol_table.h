@@ -16,7 +16,7 @@ namespace FE::Sym
       public:
         void reset() { static_cast<Derived*>(this)->reset_impl(); }
 
-        void addSymbol(Entry* entry, AST::VarAttr& attr) { static_cast<Derived*>(this)->addSymbol_impl(entry, attr); }
+        void addSymbol(Entry* entry, AST::VarAttr* attr) { static_cast<Derived*>(this)->addSymbol_impl(entry, attr); }
         AST::VarAttr* getSymbol(Entry* entry) { return static_cast<Derived*>(this)->getSymbol_impl(entry); }
 
         void enterScope() { static_cast<Derived*>(this)->enterScope_impl(); }

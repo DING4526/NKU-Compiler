@@ -223,11 +223,6 @@ BLOCK_STMT:
             $$ = nullptr;
             delete $2;
         }
-        else if ($2->size() == 1)
-        {
-            $$ = (*$2)[0];
-            delete $2;
-        }
         else $$ = new BlockStmt($2, @1.begin.line, @1.begin.column);
     }
     ;

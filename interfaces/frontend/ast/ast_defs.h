@@ -44,6 +44,19 @@
     X(DIVEQ, /=, 21)            \
     X(MODEQ, %=, 22)            \
 
+#define AST_STMT_TYPE                       \
+    X(UNKSTMT, unknownstmt, 0)              \
+    X(EXPRSTMT, Expr_Stmt, 1)               \
+    X(FUNCDECLSTMT, FuncDeclStmt, 2)        \
+    X(VARDECLSTMT, VarDeclStmt, 3)          \
+    X(BLOCKSTMT, BlockStmt, 4)              \
+    X(RETURNSTMT, ReturnStmt, 5)            \
+    X(WHILESTMT, WhileStmt, 6)              \
+    X(IFSTMT, IfStmt, 7)                    \
+    X(BREAKSTMT, BreakStmt, 8)              \
+    X(CONTINUESTMT, ContinueStmt, 9)        \
+    X(FORSTMT, ForStmt, 10)                 
+
 namespace FE::AST
 {
     constexpr size_t maxTypeIdx = []() {
@@ -67,6 +80,12 @@ namespace FE::AST
     {
 #define X(name, lname, idx) name = idx,
         AST_BASETYPE_DECL
+#undef X
+    };
+    enum class StmtType
+    {
+#define X(name, lname, idx) name = idx,
+        AST_STMT_TYPE
 #undef X
     };
 
@@ -244,8 +263,8 @@ namespace FE::AST
         std::vector<VarValue> initList;
 
         VarAttr() : isConstDecl(false), type(voidType), scopeLevel(-1), arrayDims(), initList() {}
-        VarAttr(Type* t, bool isConst = false, int level = -1)
-            : isConstDecl(isConst), type(t), scopeLevel(level), arrayDims(), initList()
+        VarAttr(Type* t, bool isConst = false, int level = -1, std::vector<int> dims = {}, std::vector<VarValue> inits = {})
+            : isConstDecl(isConst), type(t), scopeLevel(level), arrayDims(dims), initList(inits)
         {}
     };
 
