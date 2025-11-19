@@ -2,7 +2,6 @@
 #include <limits>
 #include <climits>
 #include <type_traits>
-#include <functional>
 
 namespace FE::AST
 { /*

@@ -1,6 +1,8 @@
 #ifndef __FRONTEND_AST_VISITOR_SEMENTIC_CHECK_AST_CHECKER_H__
 #define __FRONTEND_AST_VISITOR_SEMENTIC_CHECK_AST_CHECKER_H__
 
+#include "frontend/ast/ast_defs.h"
+#include "frontend/symbol/symbol_entry.h"
 #include <frontend/ast/ast_visitor.h>
 #include <frontend/ast/ast.h>
 #include <frontend/ast/decl.h>
@@ -59,7 +61,7 @@ namespace FE::AST
               funcDecls(),
               mainExists(false),
               funcHasReturn(false),
-              curFuncRetType(voidType),
+              curFuncRetType(TypeFactory::getBasicType(Type_t::UNK)),
               loopDepth(0),
               errors()
         {
@@ -92,7 +94,26 @@ namespace FE::AST
       public:
         const std::map<FE::Sym::Entry*, VarAttr>&       getGlbSymbols() const { return glbSymbols; }
         const std::map<FE::Sym::Entry*, FuncDeclStmt*>& getFuncDecls() const { return funcDecls; }
-
+        // void addFuncDecl(FuncDeclStmt* stmt) {
+        //   if(stmt->entry->getName() == "main") {
+        //     mainExists = 1;
+        //   }
+        //   if(!funcDecls.count(stmt->entry)) {
+        //     funcDecls[stmt->entry] = stmt;
+        //   }
+        // }
+        // void addGlbSymbols(VarDeclaration* decl) {
+        //   for(auto x : *(decl->decls)) {
+        //     LeftValExpr *lval = (LeftValExpr*)x->lval;
+        //     std::vector<int> dims;
+        //     std::vector<VarValue> inits;
+        //     for(auto expr : *lval->indices) {
+        //       if()
+        //     }
+        //     glbSymbols[lval->entry] = VarAttr(decl->type, decl->isConstDecl,
+        //                         symTable.getScopeDepth(), dims, inits);
+        //   }
+        // }
       private:
         // Basic AST nodes
         bool visit(Root& node) override;

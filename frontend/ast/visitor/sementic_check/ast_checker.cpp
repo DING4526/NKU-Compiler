@@ -1,3 +1,5 @@
+#include "frontend/ast/ast_defs.h"
+#include "frontend/ast/stmt.h"
 #include <frontend/ast/visitor/sementic_check/ast_checker.h>
 #include <debug.h>
 
@@ -7,8 +9,18 @@ namespace FE::AST
     {
         // TODO(Lab3-1): 实现根节点的语义检查
         // 重置符号表，遍历所有顶层语句进行检查，确保存在main函数
-        (void)node;
-        TODO("Lab3-1: Implement Root node semantic checking");
+        // TODO("Lab3-1: Implement Root node semantic checking");
+        bool res = 1;
+        symTable.reset();
+        symTable.enterScope();
+        for(StmtNode* stmt : *node.getStmts()) {
+            res &= apply(*this, *stmt);
+        }
+        if(!mainExists) {
+            std::string error_str = "where is your main function ?";
+            errors.emplace_back(error_str);
+        }
+        return res & mainExists;
     }
 
     void ASTChecker::libFuncRegister()
