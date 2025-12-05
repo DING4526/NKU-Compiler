@@ -31,17 +31,22 @@ namespace FE::AST
         symTable.enterScope();
         curFuncRetType = node.retType;
         funcHasReturn = false;
-        for(auto x : *node.params) {
-            res &= apply(*this, *x);
+
+        // 形参：可能为 nullptr
+        if (node.params)
+        {
+            for (auto* p : *node.params)
+                res &= apply(*this, *p);
         }
-        auto blkStmt = static_cast<BlockStmt*>(node.body);
-        if(blkStmt->stmts) {
-            for(auto x : *blkStmt->stmts) {
-                res &= apply(*this, *x);
-            }
-        }
+
+        // 函数体：也可能为 nullptr（仅声明、不定义）
+        if (node.body)
+            res &= apply(*this, *node.body);
+
         symTable.exitScope();
-        if(!funcHasReturn) {
+        
+        // 只有非 void 函数必须保证有 return
+        if(curFuncRetType->getBaseType() != Type_t::VOID && !funcHasReturn) {
             std::string error_str = "Func may have no return for func " + node.entry->getName()
                 + " at line " + std::to_string(node.line_num);
             errors.emplace_back(error_str);
@@ -85,29 +90,53 @@ namespace FE::AST
     {
         // TODO(Lab3-1): 实现返回语句的语义检查
         // 设置返回标记，检查作用域，检查返回值类型匹配
-        bool res = apply(*this, *node.retExpr);
-        if(curFuncRetType->getBaseType() == Type_t::UNK) {
+        if (curFuncRetType->getBaseType() == Type_t::UNK)
+        {
             std::string error_str = "return stmt not in func at line " + std::to_string(node.line_num);
             errors.emplace_back(error_str);
             return false;
         }
-        funcHasReturn = 1;
-        if(!res) return false;
-        if(node.retExpr->attr.val.value.type->getTypeGroup() == TypeGroup::POINTER) {
-            std::string error_str = "unavaliable return type: pointer , at line " + std::to_string(node.line_num);
+
+        bool res = true;
+
+        if (!node.retExpr)
+        {
+            // 没有返回值
+            if (curFuncRetType->getBaseType() != Type_t::VOID)
+            {
+                std::string error_str = "missing return value at line " + std::to_string(node.line_num);
+                errors.emplace_back(error_str);
+                return false;
+            }
+            funcHasReturn = true;
+            return true;
+        }
+
+        // 有返回值
+        res &= apply(*this, *node.retExpr);
+        if (!res) return false;
+
+        auto* rt = node.retExpr->attr.val.value.type;
+
+        if (rt->getTypeGroup() == TypeGroup::POINTER)
+        {
+            std::string error_str =
+                "unavaliable return type: pointer , at line " + std::to_string(node.line_num);
             errors.emplace_back(error_str);
             return false;
         }
-        if(node.retExpr->attr.val.value.type->getBaseType() == curFuncRetType->getBaseType()) {
+
+        // 简单的“非 void 互相转换”放行（int / float 之类）
+        if (rt->getBaseType() == curFuncRetType->getBaseType() ||
+        (rt->getBaseType() != Type_t::VOID && curFuncRetType->getBaseType() != Type_t::VOID))
+        {
+            funcHasReturn = true;
             return true;
-        } else if(node.retExpr->attr.val.value.type->getBaseType() != Type_t::VOID && curFuncRetType->getBaseType() != Type_t::VOID) {
-            return true;
-        } else {
-            std::string error_str = "unmatched return type at line " + std::to_string(node.line_num);
-            errors.emplace_back(error_str);
-            return false;
         }
-        return res;
+
+        std::string error_str = "unmatched return type at line " + std::to_string(node.line_num);
+        errors.emplace_back(error_str);
+        return false;
         // (void)node;
         // TODO("Lab3-1: Implement ReturnStmt semantic checking");
     }
@@ -124,7 +153,8 @@ namespace FE::AST
                 res = false;
             }
         ++loopDepth;
-        res &= apply(*this, *node.body);
+        if (node.body)  // 判空防止 while(1); body 为空指针
+            res &= apply(*this, *node.body);
         --loopDepth;
         return res;
         // (void)node;
@@ -144,7 +174,8 @@ namespace FE::AST
                 std::string error_str = "invalid type expr as if condition at line " + std::to_string(node.line_num);
                 errors.emplace_back(error_str);
             }
-        res &= apply(*this, *node.thenStmt);
+        if(node.thenStmt)
+            res &= apply(*this, *node.thenStmt);
         bool ifhasret = funcHasReturn;
         funcHasReturn = false;
         if(node.elseStmt) {
