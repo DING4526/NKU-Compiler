@@ -12,3 +12,9 @@ frontend/parser/lexer.h
 frontend/parser/yacc.cpp
 frontend/parser/yacc.h
 compile_commands.json
+
+.vscode/settings.json
+location.hh
+yacc.output
+yacc.tab.c
+yacc.tab.h

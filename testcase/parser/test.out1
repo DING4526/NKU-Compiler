@@ -1,0 +1,37 @@
+ASTree
+|-- VarDeclStmt
+|   `-- VarDeclaration, BaseType: int
+|       `-- VarDeclarator
+|           |-- Var: 
+|           |   `-- LeftValueExpr a
+|           `-- Init: 
+|               `-- Initializer
+|                   `-- literal int: 1
+|-- VarDeclStmt
+|   `-- VarDeclaration, BaseType: int
+|       `-- VarDeclarator
+|           |-- Var: 
+|           |   `-- LeftValueExpr b
+|           `-- Init: 
+|               `-- Initializer
+|                   `-- UnaryExpr -
+|                       `-- literal int: 2
+|-- VarDeclStmt
+|   `-- VarDeclaration, BaseType: int
+|       `-- VarDeclarator
+|           |-- Var: 
+|           |   `-- LeftValueExpr c
+|           `-- Init: 
+|               `-- Initializer
+|                   `-- BinaryExpr -
+|                       |-- BinaryExpr *
+|                       |   |-- literal int: 3
+|                       |   `-- literal int: 4
+|                       `-- literal int: 5
+`-- FuncDecl main() -> int, line: 5
+    `-- BlockStmt, line: 6
+        |-- WhileStmt
+        |   |-- Condition:
+        |   |   `-- literal int: 1
+        `-- ReturnStmt
+            `-- literal int: 0
