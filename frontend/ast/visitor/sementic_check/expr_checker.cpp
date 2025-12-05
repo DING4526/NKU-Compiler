@@ -23,10 +23,12 @@ namespace FE::AST
         //是指针类型
         if((node.indices && attr->arrayDims.size() > node.indices->size())
             || (!node.indices && attr->arrayDims.size())) {
-            node.isLval = false;
+            //node.isLval = false;
             node.attr.val.isConstexpr = false;
             node.attr.val.value.type = TypeFactory::getPtrType(attr->type);
-        } else node.isLval = true;
+        } else {
+            //node.isLval = true;
+        }
         int sum = 1, pos = 0;
         bool res = 1;
         //如果是数组或者数组指针，判断是否越界
@@ -129,7 +131,12 @@ namespace FE::AST
         auto func = funcDecls[node.func];
         node.attr.val.value.type = func->retType;
         node.attr.val.isConstexpr = false;
-        if(!func->params && !node.args) return true;
+        
+        // treat empty param list as no params
+        bool func_no_params = (!func->params) || (func->params->size() == 0);
+        bool call_no_args   = (!node.args) || (node.args->size() == 0);
+        if(func_no_params && call_no_args) return true;
+
         if(func->params && node.args && func->params->size() == node.args->size()) {
             bool res = 1, parunmatch = 0;
             for(size_t i = 0; i < func->params->size(); ++i) {

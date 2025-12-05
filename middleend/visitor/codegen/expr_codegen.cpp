@@ -28,15 +28,6 @@ namespace ME
 
         lval2ptr[&node] = ptr;
 
-        // 如果语义上它被标记为左值（例如出现在赋值左边），只需要地址即可；否则 load 出值
-        // node.isLval 在你的描述里用于区分是否真的是左值
-        if (node.isLval)
-        {
-            // 不产生结果寄存器（但你的表达式体系一般希望每个 expr 都能 produce reg）
-            // 这里保持一致：左值表达式在需要值的时候会 load；赋值时直接用 lval2ptr
-            return;
-        }
-
         DataType ty = convert(node.attr.val.value.type);
         if (ty == DataType::I1) ty = DataType::I32; // bool 当 i32 处理（基础要求）
         ASSERT(ty == DataType::I32 && "Base requirement: no float");

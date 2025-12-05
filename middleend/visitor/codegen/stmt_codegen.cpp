@@ -222,8 +222,8 @@ namespace ME
         enterBlock(bodyB);
         if (node.body)
             apply(*this, *node.body, m);
-        if (bodyB->insts.empty() || !bodyB->insts.back()->isTerminator())
-            bodyB->insert(createBranchInst(condL));
+        if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator()))
+            insert(createBranchInst(condL));
 
         // restore loop labels
         curFunc->loopStartLabel = savedStart;
@@ -271,16 +271,17 @@ namespace ME
         enterBlock(thenB);
         if (node.thenStmt)
             apply(*this, *node.thenStmt, m);
-        if (thenB->insts.empty() || !thenB->insts.back()->isTerminator())
-            thenB->insert(createBranchInst(endL));
+        if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator()))
+            insert(createBranchInst(endL));
 
         // else
         if (elseB)
         {
             enterBlock(elseB);
-            apply(*this, *node.elseStmt, m);
-            if (elseB->insts.empty() || !elseB->insts.back()->isTerminator())
-                elseB->insert(createBranchInst(endL));
+            if (node.elseStmt)
+                apply(*this, *node.elseStmt, m);
+            if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator()))
+                insert(createBranchInst(endL));
         }
 
         // end
@@ -365,14 +366,14 @@ namespace ME
         // body
         enterBlock(bodyB);
         if (node.body) apply(*this, *node.body, m);
-        if (bodyB->insts.empty() || !bodyB->insts.back()->isTerminator())
-            bodyB->insert(createBranchInst(stepL));
+        if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator()))
+            insert(createBranchInst(stepL));
 
         // step
         enterBlock(stepB);
         if (node.step) apply(*this, *node.step, m);
-        if (stepB->insts.empty() || !stepB->insts.back()->isTerminator())
-            stepB->insert(createBranchInst(condL));
+        if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator()))
+            insert(createBranchInst(condL));
 
         curFunc->loopStartLabel = savedStart;
         curFunc->loopEndLabel   = savedEnd;
