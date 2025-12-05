@@ -43,7 +43,14 @@ namespace ME
 
             // 1) alloca
             size_t ptrReg = getNewRegId();
-            insert(createAllocaInst(DataType::I32, ptrReg));
+            
+            Instruction* allocaInst = createAllocaInst(DataType::I32, ptrReg);
+
+            Block* entryBlock = getBlock(0);        // 约定：blockId=0 是入口块
+            auto& insts = entryBlock->insts;        // std::list<Instruction*>
+
+            // 简单做法：所有局部变量的 alloca 都插到块最前面
+            insts.push_front(allocaInst);
 
             // 2) 记录符号 -> ptr reg
             name2reg.addSymbol(lv->entry, ptrReg);

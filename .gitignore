@@ -18,3 +18,6 @@ location.hh
 yacc.output
 yacc.tab.c
 yacc.tab.h
+
+test.o
+test.out
