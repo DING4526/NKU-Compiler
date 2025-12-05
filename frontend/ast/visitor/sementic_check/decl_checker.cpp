@@ -83,7 +83,7 @@ namespace FE::AST
     {
         // TODO(Lab3-1): 实现函数形参的语义检查
         // 检查形参重定义，处理数组形参的类型退化，将形参加入符号表
-        bool res = 0;
+        bool res = 1;
         auto attr = new VarAttr(node.type, false, symTable.getScopeDepth());
         if(node.dims) {
             attr->type = TypeFactory::getPtrType(node.type);
