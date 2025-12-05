@@ -135,11 +135,44 @@ namespace ME
         lhs.falseTar = node.falseTar;
         apply(*this, lhs, m);
 
+        // 如果 lhs 没在自身里发 terminator（比如是普通表达式），这里补一个 br
+        if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator())){
+            size_t   condReg = getMaxReg();
+            DataType t       = convert(lhs.attr.val.value.type);
+
+            if (t == DataType::I32){
+                auto conv = createTypeConvertInst(DataType::I32, DataType::I1, condReg);
+                for (auto* inst : conv) insert(inst);
+                condReg = getMaxReg();
+            }
+            else if (t != DataType::I1){
+                ERROR("Logical AND lhs must be int/bool");
+            }
+
+            insert(createBranchInst(condReg, rhsLabel, node.falseTar));
+        }
+
         // 进入 rhs block 生成 rhs，去往 node.trueTar / node.falseTar
         enterBlock(rhsBlock);
         rhs.trueTar = node.trueTar;
         rhs.falseTar = node.falseTar;
         apply(*this, rhs, m);
+
+        if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator())){
+            size_t   condReg = getMaxReg();
+            DataType t       = convert(rhs.attr.val.value.type);
+
+            if (t == DataType::I32){
+                auto conv = createTypeConvertInst(DataType::I32, DataType::I1, condReg);
+                for (auto* inst : conv) insert(inst);
+                condReg = getMaxReg();
+            }
+            else if (t != DataType::I1){
+                ERROR("Logical AND rhs must be int/bool");
+            }
+
+            insert(createBranchInst(condReg, node.trueTar, node.falseTar));
+        }
     }
 
     void ASTCodeGen::handleLogicalOr(
@@ -159,10 +192,42 @@ namespace ME
         lhs.falseTar = rhsLabel;
         apply(*this, lhs, m);
 
+        if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator())){
+            size_t   condReg = getMaxReg();
+            DataType t       = convert(lhs.attr.val.value.type);
+
+            if (t == DataType::I32){
+                auto conv = createTypeConvertInst(DataType::I32, DataType::I1, condReg);
+                for (auto* inst : conv) insert(inst);
+                condReg = getMaxReg();
+            }
+            else if (t != DataType::I1){
+                ERROR("Logical OR lhs must be int/bool");
+            }
+
+            insert(createBranchInst(condReg, node.trueTar, rhsLabel));
+        }
+
         enterBlock(rhsBlock);
         rhs.trueTar = node.trueTar;
         rhs.falseTar = node.falseTar;
         apply(*this, rhs, m);
+
+        if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator())){
+            size_t   condReg = getMaxReg();
+            DataType t       = convert(rhs.attr.val.value.type);
+
+            if (t == DataType::I32){
+                auto conv = createTypeConvertInst(DataType::I32, DataType::I1, condReg);
+                for (auto* inst : conv) insert(inst);
+                condReg = getMaxReg();
+            }
+            else if (t != DataType::I1){
+                ERROR("Logical OR rhs must be int/bool");
+            }
+
+            insert(createBranchInst(condReg, node.trueTar, node.falseTar));
+        }
     }
 
     void ASTCodeGen::visit(FE::AST::BinaryExpr& node, Module* m)

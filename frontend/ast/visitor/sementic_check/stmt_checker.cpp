@@ -45,8 +45,9 @@ namespace FE::AST
 
         symTable.exitScope();
         
-        // 只有非 void 函数必须保证有 return
-        if(curFuncRetType->getBaseType() != Type_t::VOID && !funcHasReturn) {
+        // 只有非 void 函数必须保证有 return (补充：main 函数也接受无 return)
+        bool isMain = (node.entry->getName() == "main");
+        if(!isMain && curFuncRetType->getBaseType() != Type_t::VOID && !funcHasReturn) {
             std::string error_str = "Func may have no return for func " + node.entry->getName()
                 + " at line " + std::to_string(node.line_num);
             errors.emplace_back(error_str);
