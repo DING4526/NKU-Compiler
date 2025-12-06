@@ -221,9 +221,8 @@ namespace ME
         };
 
         apply(*this, node, m);
-        size_t srcReg = getMaxReg();
-
-        DataType srcType = convert(node.attr.val.value.type);
+        size_t srcReg = queryExprReg(&node);              // 用表查，不猜
+        DataType srcType = queryExprType(&node);          // 直接用 attr 或表都可以
 
         if (srcType == DataType::I1)
         {
@@ -287,12 +286,12 @@ namespace ME
         };
 
         apply(*this, lhs, m);
-        size_t lhsReg = getMaxReg();
+        size_t lhsReg = queryExprReg(&lhs);
         apply(*this, rhs, m);
-        size_t rhsReg = getMaxReg();
+        size_t rhsReg = queryExprReg(&rhs);
 
-        DataType lhsType = convert(lhs.attr.val.value.type);
-        DataType rhsType = convert(rhs.attr.val.value.type);
+        DataType lhsType = queryExprType(&lhs);
+        DataType rhsType = queryExprType(&rhs);
         ASSERT(lhsType == DataType::I1 || lhsType == DataType::I32 || lhsType == DataType::F32);
         ASSERT(rhsType == DataType::I1 || rhsType == DataType::I32 || rhsType == DataType::F32);
         DataType pType = promoteType(lhsType, rhsType);
@@ -309,17 +308,17 @@ namespace ME
 
             pType = DataType::I32;
         }
-        else if (lhsType != pType)
-        {
-            auto convInsts = createTypeConvertInst(lhsType, pType, lhsReg);
-            for (auto& inst : convInsts) block->insert(inst);
-            lhsReg = getMaxReg();
-        }
-        else if (rhsType != pType)
-        {
-            auto convInsts = createTypeConvertInst(rhsType, pType, rhsReg);
-            for (auto& inst : convInsts) block->insert(inst);
-            rhsReg = getMaxReg();
+        else {
+            if (lhsType != pType){
+                auto convInsts = createTypeConvertInst(lhsType, pType, lhsReg);
+                for (auto& inst : convInsts) block->insert(inst);
+                lhsReg = getMaxReg();
+            }
+            if (rhsType != pType){
+                auto convInsts = createTypeConvertInst(rhsType, pType, rhsReg);
+                for (auto& inst : convInsts) block->insert(inst);
+                rhsReg = getMaxReg();
+            }
         }
 
         BinaryOpFunc opFunc = nullptr;

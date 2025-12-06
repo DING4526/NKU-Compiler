@@ -53,58 +53,54 @@ namespace ME
         // TODO(Lab 3-2): 生成全局变量声明 IR（支持标量与数组的初值）
 
         // TODO("Lab3-2: Implement global var declaration IR generation");
-        // 全局变量声明：VarDeclStmt -> VarDeclaration -> 若干 VarDeclarator
-        // 基础要求：只支持 int/bool 标量全局变量（不支持数组、不支持浮点、不支持初始化列表）
         ASSERT(decls && decls->decl);
-
         auto* vd = decls->decl;
-        DataType dt = convert(vd->type);
-        if (dt == DataType::I1) dt = DataType::I32; // 全局按 i32 简化（bool 当 i32）
-        ASSERT(dt == DataType::I32 && "Base requirement: only support int/bool global scalar");
+
+        DataType base = convert(vd->type);
+        if (base == DataType::I1) base = DataType::I32;
+        ASSERT(base == DataType::I32 || base == DataType::F32);
 
         for (auto* d : *vd->decls)
         {
-            // lval 必须是 LeftValExpr 且无 indices（数组不支持）
             auto* lv = dynamic_cast<FE::AST::LeftValExpr*>(d->lval);
-            ASSERT(lv && "Global var declarator lval must be LeftValExpr");
-            ASSERT((!lv->indices || lv->indices->empty()) && "Array global var not supported in base requirement");
+            ASSERT(lv);
 
+            auto itg = glbSymbols.find(lv->entry);
+            ASSERT(itg != glbSymbols.end());
+            const auto& attr = itg->second;
             std::string name = lv->entry->getName();
 
-            // 2. 计算初始化常量值
-            int initVal = 0;          // 默认 0
-            if (d->init)
+            // 数组：直接用 VarAttr 版本（维度 + 扁平 initList 全在里面）
+            if (!attr.arrayDims.empty())
             {
-                // 只支持形如 int a = <expr>; 的单一初始化（不是 {...} 列表）
-                ASSERT(d->init->singleInit && "InitializerList not supported (base requirement)");
-                auto* init = dynamic_cast<FE::AST::Initializer*>(d->init);
-                ASSERT(init && "Global initializer must be Initializer");
-
-                FE::AST::ExprNode* expr = init->init_val;
-                ASSERT(expr && "Initializer expr is null");
-
-                // ★ 关键：依赖语义分析阶段的常量折叠结果
-                auto& ev = expr->attr.val;
-
-                // 语义分析阶段应该已经确保“全局初始化必须是常量表达式”，这里作为最后一道保险
-                ASSERT(ev.isConstexpr && "Global initializer must be constant expression");
-
-                auto* ty = ev.value.type;
-                ASSERT(ty && "ExprValue type is null");
-                auto bt = ty->getBaseType();
-
-                // 基础要求下只支持 int/bool（以及 long long 当作 i32 使用）
-                ASSERT(bt == FE::AST::Type_t::INT  ||
-                    bt == FE::AST::Type_t::LL   ||
-                    bt == FE::AST::Type_t::BOOL);
-
-                initVal = ev.value.getInt();    // 已经是折叠好的整数常量
+                m->globalVars.emplace_back(new GlbVarDeclInst(base, name, attr));
+                continue;
             }
 
-            // 3. 生成全局变量 IR：统一当成 i32 处理
-            Operand* initOp = getImmeI32Operand(initVal);
+            // 标量：保留你原来的逻辑
+            int   ival = 0;
+            float fval = 0.0f;
+            bool  hasInit = (d->init != nullptr);
 
-            m->globalVars.emplace_back(new GlbVarDeclInst(DataType::I32, name, initOp));
+            if (hasInit)
+            {
+                ASSERT(d->init->singleInit);
+                auto* init = dynamic_cast<FE::AST::Initializer*>(d->init);
+                ASSERT(init && init->init_val);
+
+                auto& ev = init->init_val->attr.val;
+                ASSERT(ev.isConstexpr);
+
+                if (base == DataType::I32)
+                    ival = ev.getInt();
+                else
+                    fval = ev.getFloat();
+            }
+
+            Operand* initOp = (base == DataType::I32)
+                                ? (Operand*)getImmeI32Operand(ival)
+                                : (Operand*)getImmeF32Operand(fval);
+            m->globalVars.emplace_back(new GlbVarDeclInst(base, name, initOp));
         }
     }
 

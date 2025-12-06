@@ -101,6 +101,40 @@ namespace ME
         std::map<size_t, bool>                    paramPtrTab;  // if the i-th param is a pointer or not
         std::map<FE::AST::LeftValExpr*, Operand*> lval2ptr;
 
+        // 注意：这里只记录“求值结果”的表达式（非取址 lval 不强求记录）
+        std::unordered_map<FE::AST::ExprNode*, size_t>   expr2reg;
+        std::unordered_map<FE::AST::ExprNode*, DataType> expr2dt;
+
+        void recordExprResult(FE::AST::ExprNode* e, size_t r, DataType t)
+        {
+            if (!e) return;
+            expr2reg[e] = r;
+            expr2dt[e]  = t;
+        }
+
+        size_t queryExprReg(FE::AST::ExprNode* e)
+        {
+            auto it = expr2reg.find(e);
+            ASSERT(it != expr2reg.end() && "表达式结果寄存器未记录（禁止用 getMaxReg 猜）");
+            return it->second;
+        }
+
+        DataType queryExprType(FE::AST::ExprNode* e)
+        {
+            auto it = expr2dt.find(e);
+            ASSERT(it != expr2dt.end() && "表达式结果类型未记录");
+            return it->second;
+        }
+
+        // 统一：把某个表达式 E 的结果转换到目标类型 to，并返回“转换后寄存器”
+        size_t castTo(DataType from, DataType to, size_t srcReg)
+        {
+            if (from == to) return srcReg;
+            auto insts = createTypeConvertInst(from, to, srcReg);
+            for (auto* inst : insts) insert(inst);
+            return getMaxReg(); // 这里紧跟着插入转换指令，用 getMaxReg 是安全的
+        }
+
       public:
         ASTCodeGen(const std::map<FE::Sym::Entry*, FE::AST::VarAttr>& glbSymbols,
             const std::map<FE::Sym::Entry*, FE::AST::FuncDeclStmt*>&  funcDecls)

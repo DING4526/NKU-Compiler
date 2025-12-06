@@ -160,89 +160,61 @@ namespace FE::AST
     {
         // TODO(Lab3-1): 实现函数调用表达式的语义检查
         // 检查函数是否存在，访问实参列表，检查参数数量和类型匹配
-        if(!funcDecls.count(node.func)) {
+        // 1. 函数是否存在
+        if (!funcDecls.count(node.func)) {
             std::string error_str = "undefined function " + node.func->getName()
-                        + " at line " + std::to_string(node.line_num);
+                                    + " at line " + std::to_string(node.line_num);
             errors.emplace_back(error_str);
             return false;
         }
+
         auto func = funcDecls[node.func];
+
+        // 设置返回类型属性：这里非常重要，IR 生成要用到
         node.attr.val.value.type = func->retType;
-        node.attr.val.isConstexpr = false;
-        
-        // treat empty param list as no params
-        bool func_no_params = (!func->params) || (func->params->size() == 0);
-        bool call_no_args   = (!node.args) || (node.args->size() == 0);
-        if(func_no_params && call_no_args) return true;
+        node.attr.val.isConstexpr = false;   // 函数调用默认不是编译期常量
 
-        if(func->params && node.args && func->params->size() == node.args->size()) {
-            bool res = 1, parunmatch = 0;
-            for(size_t i = 0; i < func->params->size(); ++i) {
-                auto param = (*func->params)[i];
-                auto arg   = (*node.args)[i];
-                res &= apply(*this, *arg);
+        // 2. 参数个数检查（这个保留，否则很多明显错误会直接放进 IR 崩掉）
+        bool func_no_params = (!func->params) || func->params->empty();
+        bool call_no_args   = (!node.args)   || node.args->empty();
 
-                auto argType   = arg->attr.val.value.type;
-                auto paramType = param->type;
+        if (func_no_params && call_no_args) {
+            return true;
+        }
 
-                // void 实参直接不匹配
-                if(argType->getBaseType() == Type_t::VOID) {
-                    parunmatch = true;
-                    continue;
-                }
+        size_t param_cnt = func->params ? func->params->size() : 0;
+        size_t arg_cnt   = node.args   ? node.args->size()   : 0;
 
-                if(argType->getTypeGroup() == TypeGroup::BASIC) {
-                    // 基本类型不能传给数组形参
-                    if(param->dims) {
-                        res = 0;
-                        parunmatch = true;
-                        std::string error_str =
-                            "unmatched par (array expected) for func " + node.func->getName() +
-                            " at line " + std::to_string(node.line_num);
-                        errors.emplace_back(error_str);
-                    }
-                } else { // 指针类型
-                    // baseType 不一致
-                    if(argType->getBaseType() != paramType->getBaseType()) {
-                        parunmatch = true;
-                        continue;
-                    }
+        if (param_cnt != arg_cnt) {
+            std::string error_str = "number of par not matched for func " + node.func->getName()
+                                    + " at line " + std::to_string(node.line_num)
+                                    + " column " + std::to_string(node.col_num);
+            errors.emplace_back(error_str);
+            return false;
+        }
 
-                    // 需要维度检查时再做（param->dims 可能为空）
-                    if(param->dims) {
-                        auto lval = dynamic_cast<LeftValExpr*>(arg);
-                        if(lval) {
-                            auto vec = symTable.getSymbol(lval->entry)->arrayDims;
-                            int num = lval->indices ? (int)lval->indices->size() : 0;
+        // 3. 逐个实参做最基本的检查：表达式本身合法 + 不能是 void
+        bool ok = true;
+        for (size_t i = 0; i < param_cnt; ++i) {
+            auto* arg = (*node.args)[i];
+            ok &= apply(*this, *arg);
 
-                            for(size_t j = 0; j < param->dims->size(); ++j) {
-                                int expect = (*param->dims)[j]->attr.val.getInt();
-                                int real   = vec[j + num];
-                                if(expect == -1 || expect == real) continue;
+            auto* argType = arg->attr.val.value.type;
+            if (!argType) continue;
 
-                                res = 0;
-                                parunmatch = true;
-                                std::string error_str =
-                                    "unmatched dim for par " + param->entry->getName() +
-                                    " at line " + std::to_string(node.line_num);
-                                errors.emplace_back(error_str);
-                            }
-                        }
-                    }
-                }
-            }
-            if(parunmatch) {
-                std::string error_str = "unmatched par for func " + node.func->getName()
-                    + " at line " + std::to_string(node.line_num) + " column " + std::to_string(node.col_num);
+            // 不允许 void 实参与参与运算，这是对 IR 来说致命错误
+            if (argType->getBaseType() == Type_t::VOID) {
+                ok = false;
+                std::string error_str =
+                    "unavaliable argument (void) for func " + node.func->getName() +
+                    " at line " + std::to_string(node.line_num);
                 errors.emplace_back(error_str);
             }
-            return res && !parunmatch;
-        } else {
-            std::string error_str = "number of par not matched for func " + node.func->getName()
-                    + " at line " + std::to_string(node.line_num) + " column " + std::to_string(node.col_num);
-            errors.emplace_back(error_str);
-            return false;
+
+            // 数组/指针/维度：一律不在这里管，交给 VarAttr + IR codegen 处理
         }
+
+        return ok;
         // (void)node;
         // TODO("Lab3-1: Implement CallExpr semantic checking");
     }

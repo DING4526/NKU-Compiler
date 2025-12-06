@@ -32,56 +32,92 @@ namespace ME
         // 新作用域（函数级）
         name2reg.enterScope();
 
-        // 构造 FuncDefInst：参数寄存器列表
+        // 构造参数寄存器列表
         FuncDefInst::argList argRegs;
-        paramPtrTab.clear();
+        paramPtrTab.clear();   // 既然成员还在，就顺手用一下
 
         if (node.params)
         {
             for (size_t i = 0; i < node.params->size(); ++i)
             {
                 auto* p = (*node.params)[i];
-                DataType pt = convert(p->type);
-                bool isPtr = (pt == DataType::PTR);   // 基础要求下你可以不允许 ptr 参数；但库函数会用 PTR
-                paramPtrTab[i] = isPtr;
 
-                if (pt == DataType::I1) pt = DataType::I32;
-                if (!isPtr) ASSERT(pt == DataType::I32 && "Base requirement: only int/bool params");
+                // 是否为数组形参：有 dims 就当“数组 → 指针”
+                bool isArrayParam = (p->dims && !p->dims->empty());
+
+                DataType pt;
+                if (isArrayParam)
+                {
+                    pt = DataType::PTR;                     // IR 视为指针
+                }
+                else
+                {
+                    pt = convert(p->type);                  // int / float / bool
+                    if (pt == DataType::I1) pt = DataType::I32;
+                }
+
+                paramPtrTab[i] = isArrayParam;
+
                 size_t preg = getNewRegId();
                 argRegs.push_back({pt, getRegOperand(preg)});
             }
         }
-            
-        // 把参数列表装回 fdef
         fdef->argRegs = std::move(argRegs);
 
-        // 参数映射：为每个参数 alloca，然后 store 传入值，符号表 entry -> ptrReg
+        // 映射到符号表：区分标量参数 / 指针（数组）参数
         if (node.params)
         {
             for (size_t i = 0; i < node.params->size(); ++i)
             {
                 auto* p = (*node.params)[i];
-                ASSERT(p && p->entry);
-
-                // 基础要求：不做数组维度；但允许库函数/指针参数存在（存在就当成 ptr，直接映射）
-                DataType pt = convert(p->type);
-                if (pt == DataType::I1) pt = DataType::I32;
-
-                if (pt == DataType::PTR)
-                {
-                    // 直接把参数寄存器当作“地址”保存（不 alloca）
-                    size_t incomingReg = fdef->argRegs[i].second->getRegNum();
-                    name2reg.addSymbol(p->entry, incomingReg);
-                    continue;
-                }
-
-                size_t ptrReg = getNewRegId();
-                insert(createAllocaInst(DataType::I32, ptrReg));
+                bool isPtrParam = paramPtrTab[i];   // true => 数组形参，被视为 PTR
 
                 size_t incomingReg = fdef->argRegs[i].second->getRegNum();
-                insert(createStoreInst(DataType::I32, incomingReg, getRegOperand(ptrReg)));
 
-                name2reg.addSymbol(p->entry, ptrReg);
+                if (isPtrParam)
+                {
+                    // 形参本身就是“地址”
+                    name2reg.addSymbol(p->entry, incomingReg);
+
+                    // 为数组/指针形参构造 dims，填进 reg2attr
+                    std::vector<int> dims;
+                    if (p->dims && !p->dims->empty())
+                    {
+                        dims.reserve(p->dims->size());
+                        for (auto* dimExpr : *p->dims)
+                        {
+                            int d = -1;  // 不可求值/省略时用 -1
+                            if (dimExpr && dimExpr->attr.val.isConstexpr)
+                                d = dimExpr->attr.val.getInt();   // 例如 int b[4][1024]
+                            dims.push_back(d);
+                        }
+                    }
+                    else
+                    {
+                        // 防御性：int *p 这类也当 1 维未知长度
+                        dims.push_back(-1);
+                    }
+
+                    reg2attr[incomingReg] = FE::AST::VarAttr(
+                        p->type,          // AST 上的原始类型（base 是 int / float）
+                        /*isConstDecl*/ false,
+                        /*level*/ -1,
+                        dims,
+                        {}                // initList 对形参无意义
+                    );
+                }
+                else
+                {
+                    // 非指针形参：在栈上 alloca 再 store，后续当局部变量用
+                    DataType pt = convert(p->type);
+                    if (pt == DataType::I1) pt = DataType::I32;
+
+                    size_t ptrReg = getNewRegId();
+                    insert(createAllocaInst(pt, ptrReg));
+                    insert(createStoreInst(pt, incomingReg, getRegOperand(ptrReg)));
+
+                    name2reg.addSymbol(p->entry, ptrReg);
+                }
             }
         }
 
@@ -144,6 +180,8 @@ namespace ME
         (void)m;
 
         DataType rt = curFunc->funcDef->retType;
+        if (rt == DataType::I1) rt = DataType::I32; // 保持你原有约定
+
         if (!node.retExpr)
         {
             insert(createRetInst());
@@ -151,8 +189,12 @@ namespace ME
         }
 
         apply(*this, *node.retExpr, m);
-        size_t r = getMaxReg();
-        DataType t = convert(node.retExpr->attr.val.value.type);
+
+        // ★ 禁止 getMaxReg 猜：必须从表里取
+        size_t r  = queryExprReg(node.retExpr);
+        DataType t = queryExprType(node.retExpr);
+
+        if (t == DataType::I1) { r = castTo(DataType::I1, DataType::I32, r); t = DataType::I32; }
 
         if (rt == DataType::VOID)
         {
@@ -160,17 +202,10 @@ namespace ME
             return;
         }
 
-        // 基础要求：返回 i32；bool -> i32
-        if (t == DataType::I1)
-        {
-            auto conv = createTypeConvertInst(DataType::I1, DataType::I32, r);
-            for (auto* inst : conv) insert(inst);
-            r = getMaxReg();
-            t = DataType::I32;
-        }
-        ASSERT(rt == DataType::I32 && t == DataType::I32);
+        if (t != rt)
+            r = castTo(t, rt, r);
 
-        insert(createRetInst(DataType::I32, r));
+        insert(createRetInst(rt, r));
     }
 
     void ASTCodeGen::visit(FE::AST::WhileStmt& node, Module* m)
@@ -207,14 +242,10 @@ namespace ME
 
         if (condB->insts.empty() || !condB->insts.back()->isTerminator())
         {
-            size_t condReg = getMaxReg();
-            DataType ct = convert(node.cond->attr.val.value.type);
-            if (ct == DataType::I32)
-            {
-                auto conv = createTypeConvertInst(DataType::I32, DataType::I1, condReg);
-                for (auto* inst : conv) insert(inst);
-                condReg = getMaxReg();
-            }
+            size_t condReg = queryExprReg(node.cond);
+            DataType ct = queryExprType(node.cond);
+            if (ct != DataType::I1) condReg = castTo(ct, DataType::I1, condReg);
+
             insert(createBranchInst(condReg, bodyL, endL));
         }
 
@@ -256,14 +287,12 @@ namespace ME
         // 如果 cond 最后没发 terminator（例如是字面量/变量），这里补一个 brcond
         if (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator())
         {
-            size_t condReg = getMaxReg();
-            DataType ct = convert(node.cond->attr.val.value.type);
-            if (ct == DataType::I32)
-            {
-                auto conv = createTypeConvertInst(DataType::I32, DataType::I1, condReg);
-                for (auto* inst : conv) insert(inst);
-                condReg = getMaxReg();
-            }
+            size_t condReg = queryExprReg(node.cond);
+            DataType ct    = queryExprType(node.cond);
+
+            if (ct != DataType::I1)
+                condReg = castTo(ct, DataType::I1, condReg);
+
             insert(createBranchInst(condReg, thenL, elseL));
         }
 
@@ -346,14 +375,10 @@ namespace ME
 
             if (condB->insts.empty() || !condB->insts.back()->isTerminator())
             {
-                size_t condReg = getMaxReg();
-                DataType ct = convert(node.cond->attr.val.value.type);
-                if (ct == DataType::I32)
-                {
-                    auto conv = createTypeConvertInst(DataType::I32, DataType::I1, condReg);
-                    for (auto* inst : conv) insert(inst);
-                    condReg = getMaxReg();
-                }
+                size_t condReg = queryExprReg(node.cond);
+                DataType ct = queryExprType(node.cond);
+                if (ct != DataType::I1) condReg = castTo(ct, DataType::I1, condReg);
+
                 insert(createBranchInst(condReg, bodyL, endL));
             }
         }
