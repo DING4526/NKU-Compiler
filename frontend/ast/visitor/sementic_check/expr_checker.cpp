@@ -100,9 +100,12 @@ namespace FE::AST
         // }
 
         //如果是常量
-        int pos = 0;
-        if(node.attr.val.isConstexpr) {
-            node.attr.val = ExprValue(attr->initList[pos], true);
+        if (node.indices == nullptr && node.attr.val.isConstexpr) {
+            if (!attr->initList.empty()) {
+                node.attr.val = ExprValue(attr->initList[0], true);
+            } else {
+                node.attr.val.isConstexpr = false; // 没初始化就别折叠
+            }
         }
         return true;
         // TODO("Lab3-1: Implement LeftValExpr semantic checking");

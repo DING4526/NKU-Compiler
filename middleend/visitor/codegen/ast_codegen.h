@@ -104,6 +104,7 @@ namespace ME
         // 注意：这里只记录“求值结果”的表达式（非取址 lval 不强求记录）
         std::unordered_map<FE::AST::ExprNode*, size_t>   expr2reg;
         std::unordered_map<FE::AST::ExprNode*, DataType> expr2dt;
+        std::unordered_map<FE::Sym::Entry*, std::vector<int>> paramArrayDims; // 只存已知的后续维度
 
         void recordExprResult(FE::AST::ExprNode* e, size_t r, DataType t)
         {

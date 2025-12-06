@@ -36,7 +36,6 @@ namespace FE::AST
         virtual StmtType getStmtType() override { return StmtType::EXPRSTMT; }
     };
 
-    class ParamDeclarator;
     // 函数声明语句，如 int func(int a, float b) { ... }
     class FuncDeclStmt : public StmtNode
     {

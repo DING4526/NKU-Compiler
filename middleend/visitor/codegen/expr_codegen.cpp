@@ -123,23 +123,63 @@ void ASTCodeGen::visit(FE::AST::LeftValExpr& node, Module* m)
             elemPtr = getRegOperand(gepReg);
         }
         // ===== 指针/形参数组：只允许一维下标 =====
-        else
+else
+{
+    if (nIdx == 1)
+    {
+        size_t gepReg = getNewRegId();
+        DataType elemTy = convert(node.attr.val.value.type);
+        if (elemTy == DataType::I1) elemTy = DataType::I32;
+
+        insert(createGEP_I32Inst(elemTy, basePtr, {}, idxOps, gepReg));
+        elemPtr = getRegOperand(gepReg);
+    }
+    else
+    {
+        // 形如 b[][59]：nIdx=2，但我们知道“后续维度”= {59}
+        auto itp = paramArrayDims.find(node.entry);
+        ASSERT(itp != paramArrayDims.end() && "多维下标访问需要形参数组维度信息");
+        const auto& inner = itp->second;
+        ASSERT(inner.size() == nIdx - 1 && "形参数组维度与下标数量不匹配");
+
+        // suffix product: suf[t] = product(inner[t..])
+        std::vector<int64_t> suf(inner.size() + 1, 1);
+        for (int k = (int)inner.size() - 1; k >= 0; --k)
+            suf[k] = suf[k + 1] * inner[k];
+
+        // offset = idx0*suf[0] + idx1*suf[1] + ... + idx_{nIdx-2}*suf[nIdx-2] + idx_{nIdx-1}
+        size_t offsetReg = getNewRegId();
+        insert(createArithmeticI32Inst_ImmeAll(Operator::ADD, 0, 0, offsetReg));
+
+        for (size_t t = 0; t < nIdx; ++t)
         {
-            ASSERT(nIdx == 1 && "指针/形参数组当前仅支持一维下标访问");
+            size_t termReg = idxRegs[t];
 
-            size_t   gepReg = getNewRegId();
-            DataType elemTy = convert(node.attr.val.value.type);
-            if (elemTy == DataType::I1) elemTy = DataType::I32;
+            if (t < nIdx - 1)
+            {
+                int64_t s = suf[t];
+                if (s != 1)
+                {
+                    size_t mulReg = getNewRegId();
+                    insert(createArithmeticI32Inst_ImmeLeft(Operator::MUL, (int)s, idxRegs[t], mulReg));
+                    termReg = mulReg;
+                }
+            }
 
-            insert(createGEP_I32Inst(
-                elemTy,
-                basePtr,
-                /*dims*/ {},   // 纯指针算术
-                idxOps,
-                gepReg));
-
-            elemPtr = getRegOperand(gepReg);
+            size_t newOffset = getNewRegId();
+            insert(createArithmeticI32Inst(Operator::ADD, offsetReg, termReg, newOffset));
+            offsetReg = newOffset;
         }
+
+        size_t gepReg = getNewRegId();
+        DataType elemTy = convert(node.attr.val.value.type);
+        if (elemTy == DataType::I1) elemTy = DataType::I32;
+
+        insert(createGEP_I32Inst(elemTy, basePtr, {}, { getRegOperand(offsetReg) }, gepReg));
+        elemPtr = getRegOperand(gepReg);
+    }
+}
+
     }
 
     // 4) 不管怎样，记录“这个左值的地址”

@@ -79,8 +79,27 @@ if (isPtrParam)
     // 形参本身就是“地址”
     name2reg.addSymbol(p->entry, incomingReg);
 
-    // ★ 注意：不要给 pointer 参数填 reg2attr.arrayDims！
-    // reg2attr[incomingReg] = ...    // 这类代码直接删掉
+    //  关键：记录数组形参的“后续维度”
+    //   b[][59] => p->dims 里通常只有 {59}
+    //   d[] / g[] => p->dims 为空
+    std::vector<int> dims;
+    if (p->dims)
+    {
+        for (auto* dimExpr : *p->dims)
+        {
+            // 形参的 [] 可能被记成 -1（表示“未指定长度”）
+            // 例如 b[][59] 里第一维就是 -1
+            int d = dimExpr->attr.val.getInt();
+
+            if (d <= 0)
+            {
+                // d == -1: 省略长度；d == 0: 通常也不合法，按“忽略/不记录”处理更稳
+                continue;
+            }
+            dims.push_back(d);
+        }
+    }
+    paramArrayDims[p->entry] = dims;
 }
 else
 {

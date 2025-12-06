@@ -94,38 +94,38 @@ namespace ME
                     attr.arrayDims = dims;  // 补回去，后面 GlbVarDeclInst 也会用到
                 }
 
-                    std::cerr << "[GVAR] name=" << name
-              << " dims=[";
-    for (size_t i = 0; i < dims.size(); ++i)
-        std::cerr << dims[i] << (i + 1 < dims.size() ? "," : "");
-    std::cerr << "]";
+//                     std::cerr << "[GVAR] name=" << name
+//               << " dims=[";
+//     for (size_t i = 0; i < dims.size(); ++i)
+//         std::cerr << dims[i] << (i + 1 < dims.size() ? "," : "");
+//     std::cerr << "]";
 
-    // 关键：打印 attr 里和“初始化”有关的东西
-    // 你工程里 VarAttr 一般会有类似：
-    //   std::vector<ExprValue> initList;
-    // 或者 flattenInits / initVals ... 自己对一下名字即可
-    std::cerr << "  hasInitAst=" << (d->init != nullptr);
-    std::cerr << "  attr.arrayDims.size=" << attr.arrayDims.size();
-    // 如果有 attr.initList
-    std::cerr << "  attr.initList.size=" << attr.initList.size();
-    std::cerr << std::endl;
+//     // 关键：打印 attr 里和“初始化”有关的东西
+//     // 你工程里 VarAttr 一般会有类似：
+//     //   std::vector<ExprValue> initList;
+//     // 或者 flattenInits / initVals ... 自己对一下名字即可
+//     std::cerr << "  hasInitAst=" << (d->init != nullptr);
+//     std::cerr << "  attr.arrayDims.size=" << attr.arrayDims.size();
+//     // 如果有 attr.initList
+//     std::cerr << "  attr.initList.size=" << attr.initList.size();
+//     std::cerr << std::endl;
 
-if (!attr.initList.empty()) {
-    std::cerr << "  first 8 inits:\n";
-    for (size_t k = 0; k < std::min<size_t>(8, attr.initList.size()); ++k) {
-        auto &vv = attr.initList[k];
-        std::cerr << "    [" << k << "] type=" 
-                  << (vv.type ? vv.type->toString() : std::string("null"));
+// if (!attr.initList.empty()) {
+//     std::cerr << "  first 8 inits:\n";
+//     for (size_t k = 0; k < std::min<size_t>(8, attr.initList.size()); ++k) {
+//         auto &vv = attr.initList[k];
+//         std::cerr << "    [" << k << "] type=" 
+//                   << (vv.type ? vv.type->toString() : std::string("null"));
 
-        if (vv.type == FE::AST::intType ||
-            vv.type == FE::AST::boolType ||
-            vv.type == FE::AST::llType ||
-            vv.type == FE::AST::floatType) {
-            std::cerr << ", asInt=" << vv.getInt();
-        }
-        std::cerr << "\n";
-    }
-}
+//         if (vv.type == FE::AST::intType ||
+//             vv.type == FE::AST::boolType ||
+//             vv.type == FE::AST::llType ||
+//             vv.type == FE::AST::floatType) {
+//             std::cerr << ", asInt=" << vv.getInt();
+//         }
+//         std::cerr << "\n";
+//     }
+// }
 
                 // 记录到我们自己的表里，供 LeftValExpr 使用
                 glbArrayDims[lv->entry] = dims;
