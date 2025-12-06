@@ -139,13 +139,15 @@ namespace ME
         }
 
         // 递归展开多维数组初始化列表，按 dims 的行主序写入
-        void emitArrayInitRecursive(FE::AST::InitializerList* il,
-                                    int                     dim,
-                                    const std::vector<int>& dims,
-                                    int64_t                 baseIndex,
-                                    DataType                base,
-                                    size_t                  ptrReg,
-                                    Module*                 m);
+void emitArrayInitFill(FE::AST::InitializerList* il,
+                       int dim,
+                       const std::vector<int>& dims,
+                       int64_t baseIndex,
+                       int64_t total,
+                       int64_t& cursor,
+                       DataType base,
+                       size_t ptrReg,
+                       Module* m);
 
         // 在扁平下标 flatIndex 处写入一个标量初始化表达式
         void emitArrayScalarInitAtIndex(FE::AST::ExprNode*    expr,

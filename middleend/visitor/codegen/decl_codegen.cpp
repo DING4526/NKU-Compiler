@@ -11,81 +11,98 @@ namespace ME
             for (int d : dims) p *= d;
             return p;
         }
+        static int64_t prodFrom(const std::vector<int>& dims, int start)
+{
+    int64_t p = 1;
+    for (int i = start; i < (int)dims.size(); ++i) p *= dims[i];
+    return p;
+}
     }
 
-    // dim: 当前维度（0 是最外层），baseIndex: 当前子数组在“扁平一维数组”里的起始下标
-    void ASTCodeGen::emitArrayInitRecursive(FE::AST::InitializerList* il,
-                                            int                     dim,
-                                            const std::vector<int>& dims,
-                                            int64_t                 baseIndex,
-                                            DataType                base,
-                                            size_t                  ptrReg,
-                                            Module*                 m)
+// 支持 brace elision：中间维度允许出现 singleInit（如 {{0,9}, 8, 3}）
+// baseIndex: 本聚合在扁平数组中的起点
+// total: 本聚合最多能写多少个“标量元素”
+// cursor: 相对本聚合的写入游标 [0,total)
+void ASTCodeGen::emitArrayInitFill(FE::AST::InitializerList* il,
+                                  int dim,
+                                  const std::vector<int>& dims,
+                                  int64_t baseIndex,
+                                  int64_t total,
+                                  int64_t& cursor,
+                                  DataType base,
+                                  size_t ptrReg,
+                                  Module* m)
+{
+    ASSERT(il);
+    int rank = (int)dims.size();
+    ASSERT(rank >= 1 && dim >= 0 && dim < rank);
+
+    // 当前维度一个“子聚合”占多少标量
+    int64_t subSize = (dim < rank - 1) ? prodFrom(dims, dim + 1) : 1;
+
+    for (auto* child : *il->init_list)
     {
-        ASSERT(il);
-        int rank = static_cast<int>(dims.size());
-        ASSERT(rank >= 1 && dim >= 0 && dim < rank);
+        if (!child) continue;
+        if (cursor >= total) break; // 多余初始化丢弃，符合 C 规则
 
-        // 这一维里，每个元素（子数组）占多少个“基础元素”
-        int64_t blockSize = 1;
-        for (int i = dim + 1; i < rank; ++i)
+        if (!child->singleInit)
         {
-            ASSERT(dims[i] > 0);
-            blockSize *= dims[i];
-        }
+            // 子列表：对齐到 subSize 边界（核心：brace elision 的规则）
+            if (dim < rank - 1 && (cursor % subSize) != 0)
+                cursor += (subSize - cursor % subSize);
 
-        int maxElem = dims[dim];
-        int used    = 0;
+            if (cursor >= total) break;
 
-        for (auto* child : *il->init_list)
-        {
-            if (!child) continue;
-            if (used >= maxElem) break;    // 多余的初始化按 C 规则丢掉
+            auto* subList = dynamic_cast<FE::AST::InitializerList*>(child);
+            ASSERT(subList);
 
-            int64_t subBase = baseIndex + static_cast<int64_t>(used) * blockSize;
-
-            if (dim == rank - 1)
+            if (dim < rank - 1)
             {
-                // 最后一维：只能是标量（或简单再套一层 {}，但当前测试里没有这种情况）
-                if (!child->singleInit)
-                {
-                    ERROR("多维数组最后一维初始化目前仅支持标量或简单列表");
-                }
+                // 递归填充一个子聚合
+                int64_t subCursor = 0;
+                emitArrayInitFill(subList,
+                                  dim + 1,
+                                  dims,
+                                  baseIndex + cursor,
+                                  subSize,
+                                  subCursor,
+                                  base,
+                                  ptrReg,
+                                  m);
 
-                auto* ini = dynamic_cast<FE::AST::Initializer*>(child);
-                ASSERT(ini && ini->init_val);
-                emitArrayScalarInitAtIndex(ini->init_val,
-                                           subBase,
-                                           base,
-                                           ptrReg,
-                                           dims,
-                                           m);
-                ++used;
+                // 子聚合结束后，父游标直接跳过整个子聚合
+                cursor += subSize;
             }
             else
             {
-                // 中间维度：当前 SysY 测试里，都是 { { ... }, { ... }, ... } 这种形式
-                if (child->singleInit)
-                {
-                    ERROR("多维数组初始化缺少花括号，目前仅支持每一维都用 {} 明确分组");
-                }
-
-                auto* subList = dynamic_cast<FE::AST::InitializerList*>(child);
-                ASSERT(subList);
-                emitArrayInitRecursive(subList,
-                                       dim + 1,
-                                       dims,
-                                       subBase,
-                                       base,
-                                       ptrReg,
-                                       m);
-                ++used;
+                // 最后一维遇到额外 {}（如 {{}}），当作最后一维继续填即可
+                emitArrayInitFill(subList,
+                                  dim,
+                                  dims,
+                                  baseIndex,
+                                  total,
+                                  cursor,
+                                  base,
+                                  ptrReg,
+                                  m);
             }
         }
+        else
+        {
+            // 标量：按行主序连续填
+            auto* ini = dynamic_cast<FE::AST::Initializer*>(child);
+            ASSERT(ini && ini->init_val);
 
-        // 剩下没被显式初始化的元素，保持为 0（前面 memset 过了）
+            emitArrayScalarInitAtIndex(ini->init_val,
+                                       baseIndex + cursor,
+                                       base,
+                                       ptrReg,
+                                       dims,
+                                       m);
+            cursor += 1;
+        }
     }
-
+}
     void ASTCodeGen::emitArrayScalarInitAtIndex(FE::AST::ExprNode*    expr,
                                                 int64_t               flatIndex,
                                                 DataType              base,
@@ -254,13 +271,8 @@ namespace ME
         ASSERT(il && "数组初始化应为 InitializerList");
 
         // 从第 0 维开始递归展开
-        emitArrayInitRecursive(il,
-                               /*dim*/ 0,
-                               dims,
-                               /*baseIndex*/ 0,
-                               base,
-                               ptrReg,
-                               m);
+        int64_t cursor = 0;
+        emitArrayInitFill(il, 0, dims, 0, prod(dims), cursor, base, ptrReg, m);
     }
     else
     {
