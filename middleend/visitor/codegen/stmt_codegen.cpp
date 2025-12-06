@@ -17,7 +17,7 @@ namespace ME
         // 基础要求：只支持返回 void/int/bool（bool 按 i32 处理），参数只支持 int/bool
         DataType rt = convert(node.retType);
         if (rt == DataType::I1) rt = DataType::I32;
-        ASSERT(rt == DataType::VOID || rt == DataType::I32);
+        ASSERT(rt == DataType::VOID || rt == DataType::I32 || rt == DataType::F32);
 
         // 先 new FuncDef / Function
         auto* fdef = new FuncDefInst(rt, node.entry->getName());
@@ -121,10 +121,10 @@ else
         // 退出当前块前：保证 terminator
         if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator()))
         {
-            if (rt == DataType::VOID)
-                insert(createRetInst());
-            else
-                insert(createRetInst(0)); // patch: return 0
+            if (rt == DataType::VOID) insert(createRetInst());
+            else if (rt == DataType::I32) insert(createRetInst(0));
+            else if (rt == DataType::F32) insert(createRetInst(0.0f));
+            else ERROR("Unsupported return type patch");
         }
 
         // 清理
