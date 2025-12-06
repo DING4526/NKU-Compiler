@@ -45,15 +45,15 @@ namespace FE::AST
 
         symTable.exitScope();
         
-        // 只有非 void 函数必须保证有 return (补充：main 函数也接受无 return)
-        bool isMain = (node.entry->getName() == "main");
-        if(!isMain && curFuncRetType->getBaseType() != Type_t::VOID && !funcHasReturn) {
-            std::string error_str = "Func may have no return for func " + node.entry->getName()
-                + " at line " + std::to_string(node.line_num);
-            errors.emplace_back(error_str);
-            res = false;
-        }
-        funcHasReturn = false;
+        // SysY 测试允许非 void 函数缺省 return：交给 codegen 在末尾补默认返回值
+        // // 只有非 void 函数必须保证有 return (补充：main 函数也接受无 return)
+        // bool isMain = (node.entry->getName() == "main");
+        // if(!isMain && curFuncRetType->getBaseType() != Type_t::VOID && !funcHasReturn) {
+        //     std::string error_str = "Func may have no return for func " + node.entry->getName()
+        //         + " at line " + std::to_string(node.line_num);
+        //     errors.emplace_back(error_str);
+        //     res = false;
+        // }
         curFuncRetType = TypeFactory::getBasicType(Type_t::UNK);
         return res;
         // (void)node;
