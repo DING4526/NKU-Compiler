@@ -133,6 +133,12 @@ namespace FE::AST
             new VarAttr(lval->indices ? TypeFactory::getPtrType(node.type) : node.type,
                     node.isConstDecl, level));
             res &= apply(*this, *x);
+            // 新增：如果是全局变量，把 VarAttr 拷贝到 glbSymbols，供 IR 生成用
+            if (symTable.isGlobalScope()) {
+                if (auto* attr = symTable.getSymbol(lval->entry)) {
+                    glbSymbols[lval->entry] = *attr;
+                }
+            }
         }
         return res;
         // (void)node;

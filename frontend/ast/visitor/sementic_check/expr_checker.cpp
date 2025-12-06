@@ -20,49 +20,87 @@ namespace FE::AST
         }
         node.attr.val.value.type = attr->type;
         node.attr.val.isConstexpr = attr->isConstDecl;
-        //是指针类型
-        if((node.indices && attr->arrayDims.size() > node.indices->size())
-            || (!node.indices && attr->arrayDims.size())) {
-            //node.isLval = false;
-            node.attr.val.isConstexpr = false;
-            node.attr.val.value.type = TypeFactory::getPtrType(attr->type);
-        } else {
-            //node.isLval = true;
-        }
-        int sum = 1, pos = 0;
-        bool res = 1;
-        //如果是数组或者数组指针，判断是否越界
-        if(node.indices) {
-            if(node.indices->size() > attr->arrayDims.size()) return false;
-            for(auto x : *node.indices) {
-                res &= apply(*this, *x);
-                res &= x->attr.val.value.type->getTypeGroup() == TypeGroup::BASIC;
-                res &= !x->attr.val.isConstexpr || x->attr.val.value.type->getBaseType() == Type_t::INT;
-            }
-            if(!res) {
-                std::string error_str = "illegal shuzu at line " + std::to_string(node.line_num); 
-                errors.emplace_back(error_str);
-                return false;
-            }
-            for(size_t i = 0; i < node.indices->size(); ++i) {
-                auto x = (*node.indices)[i];
-                auto y = attr->arrayDims[i];
-                if(!x->attr.val.isConstexpr) {
-                    node.attr.val.isConstexpr = false;
-                    continue;
+
+// 保留：未定义变量检查、下标表达式类型检查；
+// 暂时关闭：越界常量检查、数组元素级常量折叠、通过 initList[pos] 取值这些“高火力”操作。
+
+        // 如果有数组下标，先检查每个下标表达式的类型是否合法
+        if (node.indices){
+            bool res = true;
+            for (auto* idxExpr : *node.indices){
+                res &= apply(*this, *idxExpr);
+                auto* t = idxExpr->attr.val.value.type;
+
+                // 要求是基本类型，且不能是 void；如果要更严，可以要求是整型
+                if (t->getTypeGroup() != TypeGroup::BASIC || t->getBaseType() == Type_t::VOID){
+                    std::string error_str = "illegal index expression at line "
+                        + std::to_string(node.line_num);
+                    errors.emplace_back(error_str);
+                    res = false;
                 }
-                int lit = x->attr.val.getInt();
-                if(y != -1 && (lit >= y || lit < 0))
-                    return false;
-                sum *= y;
             }
-            for(size_t i = 0; i < node.indices->size(); ++i) {
-                sum /= attr->arrayDims[i];
-                int x = ((LiteralExpr*)(*node.indices)[i])->literal.intValue;
-                pos += x * sum;
+            if (!res) return false;
+
+            // 有下标访问时，把结果类型视作“元素类型”，避免在后续算术中被当成 pointer
+            Type* elemType = attr->type;
+            if (attr->type->getTypeGroup() == TypeGroup::POINTER){
+                // pointer 的 baseType 即元素基本类型
+                elemType = TypeFactory::getBasicType(attr->type->getBaseType());
             }
+            node.attr.val.value.type  = elemType;
+            node.attr.val.isConstexpr = false;  // 这里不再尝试通过 initList 做常量折叠
         }
+        else{
+            // 没有下标，但这是一个数组变量本身的访问（例如传给函数当指针用）
+            // 保持 attr->type，不做特别处理
+            // 常量折叠仅在真正需要时再做，这里直接使用 attr->isConstDecl 即可
+        }
+
+        // //是指针类型
+        // if((node.indices && attr->arrayDims.size() > node.indices->size())
+        //     || (!node.indices && attr->arrayDims.size())) {
+        //     //node.isLval = false;
+        //     node.attr.val.isConstexpr = false;
+        //     node.attr.val.value.type = TypeFactory::getPtrType(attr->type);
+        // } else {
+        //     //node.isLval = true;
+        // }
+        // int sum = 1, pos = 0;
+        // bool res = 1;
+        // //如果是数组或者数组指针，判断是否越界
+        // if(node.indices) {
+        //     if(node.indices->size() > attr->arrayDims.size()) return false;
+        //     for(auto x : *node.indices) {
+        //         res &= apply(*this, *x);
+        //         res &= x->attr.val.value.type->getTypeGroup() == TypeGroup::BASIC;
+        //         res &= !x->attr.val.isConstexpr || x->attr.val.value.type->getBaseType() == Type_t::INT;
+        //     }
+        //     if(!res) {
+        //         std::string error_str = "illegal shuzu at line " + std::to_string(node.line_num); 
+        //         errors.emplace_back(error_str);
+        //         return false;
+        //     }
+        //     for(size_t i = 0; i < node.indices->size(); ++i) {
+        //         auto x = (*node.indices)[i];
+        //         auto y = attr->arrayDims[i];
+        //         if(!x->attr.val.isConstexpr) {
+        //             node.attr.val.isConstexpr = false;
+        //             continue;
+        //         }
+        //         int lit = x->attr.val.getInt();
+        //         if(y != -1 && (lit >= y || lit < 0))
+        //             return false;
+        //         sum *= y;
+        //     }
+        //     for(size_t i = 0; i < node.indices->size(); ++i) {
+        //         sum /= attr->arrayDims[i];
+        //         int x = ((LiteralExpr*)(*node.indices)[i])->literal.intValue;
+        //         pos += x * sum;
+        //     }
+        // }
+
         //如果是常量
+        int pos = 0;
         if(node.attr.val.isConstexpr) {
             node.attr.val = ExprValue(attr->initList[pos], true);
         }
@@ -141,27 +179,54 @@ namespace FE::AST
             bool res = 1, parunmatch = 0;
             for(size_t i = 0; i < func->params->size(); ++i) {
                 auto param = (*func->params)[i];
-                auto arg = (*node.args)[i];
+                auto arg   = (*node.args)[i];
                 res &= apply(*this, *arg);
-                //不是指针
-                parunmatch |= arg->attr.val.value.type->getBaseType() == Type_t::VOID;
-                if(arg->attr.val.value.type->getTypeGroup() == TypeGroup::BASIC) {
-                    res &= !param->dims;
-                } else { //是指针类型
-                    parunmatch |= arg->attr.val.value.type->getBaseType() != param->type->getBaseType();
-                    auto lval = (LeftValExpr*) arg;
-                    auto vec = symTable.getSymbol(lval->entry)->arrayDims;
-                    int num = 0;
-                    if(lval->indices) num = lval->indices->size();
-                    for(size_t i = 0; i < param->dims->size(); ++i) {
-                        if((*param->dims)[i]->attr.val.getInt() == -1
-                            || (*param->dims)[i]->attr.val.getInt() == vec[i + num])
-                            continue;
-                        else {
-                            res = 0;
-                            std::string error_str = "unmatched dim for par " + param->entry->getName() 
-                                + " at line " + std::to_string(node.line_num);
-                            errors.emplace_back(error_str);
+
+                auto argType   = arg->attr.val.value.type;
+                auto paramType = param->type;
+
+                // void 实参直接不匹配
+                if(argType->getBaseType() == Type_t::VOID) {
+                    parunmatch = true;
+                    continue;
+                }
+
+                if(argType->getTypeGroup() == TypeGroup::BASIC) {
+                    // 基本类型不能传给数组形参
+                    if(param->dims) {
+                        res = 0;
+                        parunmatch = true;
+                        std::string error_str =
+                            "unmatched par (array expected) for func " + node.func->getName() +
+                            " at line " + std::to_string(node.line_num);
+                        errors.emplace_back(error_str);
+                    }
+                } else { // 指针类型
+                    // baseType 不一致
+                    if(argType->getBaseType() != paramType->getBaseType()) {
+                        parunmatch = true;
+                        continue;
+                    }
+
+                    // 需要维度检查时再做（param->dims 可能为空）
+                    if(param->dims) {
+                        auto lval = dynamic_cast<LeftValExpr*>(arg);
+                        if(lval) {
+                            auto vec = symTable.getSymbol(lval->entry)->arrayDims;
+                            int num = lval->indices ? (int)lval->indices->size() : 0;
+
+                            for(size_t j = 0; j < param->dims->size(); ++j) {
+                                int expect = (*param->dims)[j]->attr.val.getInt();
+                                int real   = vec[j + num];
+                                if(expect == -1 || expect == real) continue;
+
+                                res = 0;
+                                parunmatch = true;
+                                std::string error_str =
+                                    "unmatched dim for par " + param->entry->getName() +
+                                    " at line " + std::to_string(node.line_num);
+                                errors.emplace_back(error_str);
+                            }
                         }
                     }
                 }

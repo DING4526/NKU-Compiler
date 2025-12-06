@@ -13,7 +13,17 @@ namespace FE::AST
         bool res = 1;
         symTable.reset();
         symTable.enterScope();
-        for(StmtNode* stmt : *node.getStmts()) {
+        for (StmtNode* stmt : *node.getStmts()){
+            if (!stmt) continue;
+            StmtType ty = stmt->getStmtType();
+            if (ty != StmtType::VARDECLSTMT && ty != StmtType::FUNCDECLSTMT)
+            {
+                std::string error_str =
+                    "illegal statement in global scope at line " + std::to_string(stmt->line_num);
+                errors.emplace_back(error_str);
+                res = false;
+                continue;              // 不对这种 stmt 再做语义检查
+            }
             res &= apply(*this, *stmt);
         }
         if(!mainExists) {
