@@ -495,12 +495,61 @@ if (op == FE::AST::Operator::ASSIGN)
                 apply(*this, *arg, m);
                 size_t areg = queryExprReg(arg);
                 DataType at = queryExprType(arg);
-                if (at == DataType::I1)
+                if (at == DataType::I1) { areg = castTo(DataType::I1, DataType::I32, areg); at = DataType::I32; }
+
+                // 1) 算出“形参期望类型” expectTy
+                DataType expectTy = at; // 默认不变
+
+                if (pDecl)
+                {
+                    // 非指针形参：用声明类型
+                    expectTy = convert(pDecl->type);
+                    if (expectTy == DataType::I1) expectTy = DataType::I32;
+                }
+                else
+                {
+                    // 2) 没有 decl（库函数/外部声明）就用内建签名兜底
+                    if (fname == "putint" || fname == "putch") expectTy = DataType::I32;
+                    else if (fname == "putfloat") expectTy = DataType::F32;
+                    else if (fname == "_sysy_starttime" || fname == "_sysy_stoptime") expectTy = DataType::I32;
+                    // putarray/putfarray 的多个参数更复杂：这里按 i 来分
+                    else if (fname == "putarray") expectTy = (i == 0 ? DataType::I32 : DataType::PTR);
+                    else if (fname == "putfarray") expectTy = (i == 0 ? DataType::I32 : DataType::PTR);
+                    else if (fname == "llvm.memset.p0.i32")
+                    {
+                        // (ptr, i8, i32, i1)
+                        if (i == 0) expectTy = DataType::PTR;
+                        else if (i == 1) expectTy = DataType::I8;
+                        else if (i == 2) expectTy = DataType::I32;
+                        else if (i == 3) expectTy = DataType::I1; // 你项目里可能用 I1/I32 表示，按你 IR 定义来
+                    }
+                }
+
+                // 3) 做隐式转换：int<->float 最关键
+                if (expectTy == DataType::I32 && at == DataType::F32)
+                {
+                    areg = castTo(DataType::F32, DataType::I32, areg); // fptosi
+                    at = DataType::I32;
+                }
+                else if (expectTy == DataType::F32 && at == DataType::I32)
+                {
+                    areg = castTo(DataType::I32, DataType::F32, areg); // sitofp
+                    at = DataType::F32;
+                }
+                else if (expectTy == DataType::I1 && at == DataType::I32)
+                {
+                    // 如果你把条件用 I1：I32 -> I1（!=0）
+                    areg = castTo(DataType::I32, DataType::I1, areg);
+                    at = DataType::I1;
+                }
+                else if (expectTy == DataType::I32 && at == DataType::I1)
                 {
                     areg = castTo(DataType::I1, DataType::I32, areg);
-                    at   = DataType::I32;
+                    at = DataType::I32;
                 }
-                args.push_back({at, getRegOperand(areg)});
+
+                // 4) 最后按 expectTy 压入参数（确保和声明一致）
+                args.push_back({expectTy, getRegOperand(areg)});
             }
         }
 
