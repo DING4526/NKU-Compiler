@@ -1,15 +1,138 @@
 #include <middleend/visitor/codegen/ast_codegen.h>
 #include <debug.h>
 
-namespace
+namespace ME
 {
-    static int64_t prod(const std::vector<int>& dims)
+    namespace
     {
-        int64_t p = 1;
-        for (int d : dims) p *= d;
-        return p;
+        static int64_t prod(const std::vector<int>& dims)
+        {
+            int64_t p = 1;
+            for (int d : dims) p *= d;
+            return p;
+        }
+    }
+
+    // dim: 当前维度（0 是最外层），baseIndex: 当前子数组在“扁平一维数组”里的起始下标
+    void ASTCodeGen::emitArrayInitRecursive(FE::AST::InitializerList* il,
+                                            int                     dim,
+                                            const std::vector<int>& dims,
+                                            int64_t                 baseIndex,
+                                            DataType                base,
+                                            size_t                  ptrReg,
+                                            Module*                 m)
+    {
+        ASSERT(il);
+        int rank = static_cast<int>(dims.size());
+        ASSERT(rank >= 1 && dim >= 0 && dim < rank);
+
+        // 这一维里，每个元素（子数组）占多少个“基础元素”
+        int64_t blockSize = 1;
+        for (int i = dim + 1; i < rank; ++i)
+        {
+            ASSERT(dims[i] > 0);
+            blockSize *= dims[i];
+        }
+
+        int maxElem = dims[dim];
+        int used    = 0;
+
+        for (auto* child : *il->init_list)
+        {
+            if (!child) continue;
+            if (used >= maxElem) break;    // 多余的初始化按 C 规则丢掉
+
+            int64_t subBase = baseIndex + static_cast<int64_t>(used) * blockSize;
+
+            if (dim == rank - 1)
+            {
+                // 最后一维：只能是标量（或简单再套一层 {}，但当前测试里没有这种情况）
+                if (!child->singleInit)
+                {
+                    ERROR("多维数组最后一维初始化目前仅支持标量或简单列表");
+                }
+
+                auto* ini = dynamic_cast<FE::AST::Initializer*>(child);
+                ASSERT(ini && ini->init_val);
+                emitArrayScalarInitAtIndex(ini->init_val,
+                                           subBase,
+                                           base,
+                                           ptrReg,
+                                           dims,
+                                           m);
+                ++used;
+            }
+            else
+            {
+                // 中间维度：当前 SysY 测试里，都是 { { ... }, { ... }, ... } 这种形式
+                if (child->singleInit)
+                {
+                    ERROR("多维数组初始化缺少花括号，目前仅支持每一维都用 {} 明确分组");
+                }
+
+                auto* subList = dynamic_cast<FE::AST::InitializerList*>(child);
+                ASSERT(subList);
+                emitArrayInitRecursive(subList,
+                                       dim + 1,
+                                       dims,
+                                       subBase,
+                                       base,
+                                       ptrReg,
+                                       m);
+                ++used;
+            }
+        }
+
+        // 剩下没被显式初始化的元素，保持为 0（前面 memset 过了）
+    }
+
+    void ASTCodeGen::emitArrayScalarInitAtIndex(FE::AST::ExprNode*    expr,
+                                                int64_t               flatIndex,
+                                                DataType              base,
+                                                size_t                ptrReg,
+                                                const std::vector<int>& dims,
+                                                Module*               m)
+    {
+        ASSERT(expr);
+        // 求值
+        apply(*this, *expr, m);
+        size_t   vreg = queryExprReg(expr);
+        DataType vt   = queryExprType(expr);
+
+        // bool -> i32
+        if (vt == DataType::I1)
+        {
+            vreg = castTo(DataType::I1, DataType::I32, vreg);
+            vt   = DataType::I32;
+        }
+        // 需要的话做数值转换
+        if (vt != base)
+            vreg = castTo(vt, base, vreg);
+
+        // 生成下标寄存器（i32）
+        ASSERT(flatIndex >= 0 && flatIndex <= INT32_MAX);
+        size_t idxReg = getNewRegId();
+        insert(createArithmeticI32Inst_ImmeAll(Operator::ADD,
+                                               static_cast<int>(flatIndex),
+                                               0,
+                                               idxReg));
+
+    // GEP：已经是“扁平下标”了，这里要把它当成一维 i32 数组来算，
+    //      所以 dims 传空，让 createGEP_I32Inst 生成：
+    //      getelementptr i32, ptr %ptrReg, i32 flatIndex
+    (void)dims;
+    size_t gepReg = getNewRegId();
+    insert(createGEP_I32Inst(
+        base,                     // 元素类型：i32 / f32
+        getRegOperand(ptrReg),    // alloca 得到的指针
+        /*dims*/ {},              // ★★ 关键改动：不再传 dims
+        { getRegOperand(idxReg) },
+        gepReg));
+
+    insert(createStoreInst(base, vreg, getRegOperand(gepReg)));
     }
 }
+
 
 namespace ME
 {
@@ -125,40 +248,25 @@ namespace ME
 
                 // 优先：如果语义阶段已把 initList 展平到符号属性（理想）
                 // 由于这里暂时拿不到 entry->VarAttr，我们退化：支持 InitializerList 递归生成 store
-                if (!d->init->singleInit)
-                {
-                    auto* il = dynamic_cast<FE::AST::InitializerList*>(d->init);
-                    ASSERT(il && "数组初始化应为 InitializerList");
-                    // 这里给出最小实现：只支持一维平铺 {a,b,c,...}
-                    // 多维递归展开你可以后续补（如果你确认 init_list 的嵌套结构都保留）
-                    int idx = 0;
-                    for (auto* item : *il->init_list)
-                    {
-                        if (!item) continue;
-                        if (!item->singleInit) ERROR("多维嵌套初始化列表：请按需要递归展开（本版本先不展开）");
+    if (!d->init->singleInit)
+    {
+        auto* il = dynamic_cast<FE::AST::InitializerList*>(d->init);
+        ASSERT(il && "数组初始化应为 InitializerList");
 
-                        auto* ini = dynamic_cast<FE::AST::Initializer*>(item);
-                        ASSERT(ini && ini->init_val);
-                        apply(*this, *ini->init_val, m);
-                        size_t vreg = queryExprReg(ini->init_val);
-                        DataType vt = queryExprType(ini->init_val);
-                        if (vt == DataType::I1) { vreg = castTo(DataType::I1, DataType::I32, vreg); vt = DataType::I32; }
-                        if (vt != base) vreg = castTo(vt, base, vreg);
-
-                        // 生成 GEP(ptr, [idx])（仅一维）
-                        size_t gepReg = getNewRegId();
-                        insert(createGEP_I32Inst(base, getRegOperand(ptrReg), dims, {getImmeI32Operand(idx)}, gepReg));
-                        insert(createStoreInst(base, vreg, getRegOperand(gepReg)));
-
-                        idx++;
-                        if (idx >= nElem) break;
-                    }
-                }
-                else
-                {
-                    // int a[3] = expr; 这种不合法或当作 a[0]=expr（按你需求定）
-                    ERROR("数组不支持 singleInit 形式初始化");
-                }
+        // 从第 0 维开始递归展开
+        emitArrayInitRecursive(il,
+                               /*dim*/ 0,
+                               dims,
+                               /*baseIndex*/ 0,
+                               base,
+                               ptrReg,
+                               m);
+    }
+    else
+    {
+        // 按 SysY 习惯，这种写法一般不会出现，直接给出错误（或者你愿意，也可以当 a[0] = expr 处理）
+        ERROR("数组不支持 singleInit 形式初始化");
+    }
             }
         }
     }

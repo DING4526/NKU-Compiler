@@ -329,6 +329,15 @@ VAR_DECLARATOR:
         InitDecl* init = new InitializerList($5, @3.begin.line, @3.begin.column);
         $$ = new VarDeclarator(lval, init, @1.begin.line, @1.begin.column);
       }
+    | IDENT ARRAY_DIMENSION_EXPR_LIST ASSIGN LBRACE RBRACE {
+        Entry* e = Entry::getEntry($1);
+        ExprNode* lval = new LeftValExpr(e, $2, @1.begin.line, @1.begin.column);
+
+        auto list = new std::vector<InitDecl*>();
+        InitDecl* init = new InitializerList(list, @4.begin.line, @4.begin.column);
+
+        $$ = new VarDeclarator(lval, init, @1.begin.line, @1.begin.column);
+      }
     | IDENT ARRAY_DIMENSION_EXPR_LIST ASSIGN NOCOMMA_EXPR {
         Entry* e = Entry::getEntry($1);
         ExprNode* lval = new LeftValExpr(e, $2, @1.begin.line, @1.begin.column);

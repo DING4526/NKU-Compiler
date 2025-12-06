@@ -137,6 +137,23 @@ namespace ME
             return getMaxReg(); // 这里紧跟着插入转换指令，用 getMaxReg 是安全的
         }
 
+        // 递归展开多维数组初始化列表，按 dims 的行主序写入
+        void emitArrayInitRecursive(FE::AST::InitializerList* il,
+                                    int                     dim,
+                                    const std::vector<int>& dims,
+                                    int64_t                 baseIndex,
+                                    DataType                base,
+                                    size_t                  ptrReg,
+                                    Module*                 m);
+
+        // 在扁平下标 flatIndex 处写入一个标量初始化表达式
+        void emitArrayScalarInitAtIndex(FE::AST::ExprNode*    expr,
+                                        int64_t               flatIndex,
+                                        DataType              base,
+                                        size_t                ptrReg,
+                                        const std::vector<int>& dims,
+                                        Module*               m);
+
       public:
         ASTCodeGen(const std::map<FE::Sym::Entry*, FE::AST::VarAttr>& glbSymbols,
             const std::map<FE::Sym::Entry*, FE::AST::FuncDeclStmt*>&  funcDecls)
