@@ -2,89 +2,168 @@
 
 namespace ME
 {
-    void ASTCodeGen::visit(FE::AST::LeftValExpr& node, Module* m)
+void ASTCodeGen::visit(FE::AST::LeftValExpr& node, Module* m)
+{
+    (void)m;
+
+    // 1) 找到 base ptr：局部优先，其次全局
+    size_t  localPtrReg = name2reg.getReg(node.entry);
+    Operand* basePtr    = nullptr;
+    bool    isLocal     = (localPtrReg != static_cast<size_t>(-1));
+    if (isLocal)
+        basePtr = getRegOperand(localPtrReg);                     // alloca 返回的指针
+    else
+        basePtr = getGlobalOperand(node.entry->getName());        // 全局符号
+
+    // 2) 取维度信息（决定是真数组还是“指针风格”）
+    std::vector<int> dims;
+    bool             hasDims = false;  // 真数组才会有维度
+    if (isLocal)
     {
-        // TODO(Lab 3-2): 生成左值表达式的取址/取值 IR
-        // 查找变量位置（全局或局部），处理数组下标/GEP，必要时发出load
+        auto ita = reg2attr.find(localPtrReg);
+        if (ita != reg2attr.end() && !ita->second.arrayDims.empty())
+        {
+            dims    = ita->second.arrayDims;
+            hasDims = true;
+        }
+    }
+    else
+    {
+        // ★ 不再直接用 glbSymbols，而是用我们在 handleGlobalVarDecl 里记录的 glbArrayDims
+        auto itg = glbArrayDims.find(node.entry);
+        if (itg != glbArrayDims.end())
+        {
+            dims    = itg->second;
+            hasDims = true;
+        }
+    }
+    //     // ☆ 加一行调试：
+    // printf("LeftVal %s: isLocal=%d hasDims=%d dimsSize=%zu\n",
+    //        node.entry->getName().c_str(), (int)isLocal, (int)hasDims, dims.size());
 
-        // TODO("Lab3-2: Implement LeftValExpr IR generation");
-        (void)m;
-        // 1) 找到 base ptr：局部优先，其次全局
-        size_t localPtrReg = name2reg.getReg(node.entry);
-        Operand* basePtr = nullptr;
-        bool isLocal = (localPtrReg != static_cast<size_t>(-1));
-        if (isLocal)
-            basePtr = getRegOperand(localPtrReg);      // alloca 返回的指针
-        else
-            basePtr = getGlobalOperand(node.entry->getName());  // 全局符号
+    Operand* elemPtr = basePtr;
 
-        // 2) 取数组维度信息（供 GEP 用）
-        std::vector<int> dims;
-        if (isLocal) {
-            auto ita = reg2attr.find(localPtrReg);
-            if (ita != reg2attr.end())
-                dims = ita->second.arrayDims;
-        } else {
-            auto itg = glbSymbols.find(node.entry);
-            if (itg != glbSymbols.end())
-                dims = itg->second.arrayDims;
+    // 3) 如果有下标 => 生成 GEP
+    if (node.indices && !node.indices->empty())
+    {
+        std::vector<Operand*> idxOps;
+        std::vector<size_t>   idxRegs;
+        idxOps.reserve(node.indices->size());
+        idxRegs.reserve(node.indices->size());
+        for (auto* idxExpr : *node.indices)
+        {
+            apply(*this, *idxExpr, m);
+            size_t   ir = queryExprReg(idxExpr);
+            DataType it = queryExprType(idxExpr);
+
+            // 下标统一转 i32
+            if (it != DataType::I32)
+                ir = castTo(it, DataType::I32, ir);
+
+            idxRegs.push_back(ir);
+            idxOps.push_back(getRegOperand(ir));
         }
 
-        Operand* elemPtr = basePtr;
+        size_t nIdx = idxRegs.size();
 
-        // 3) 如果有下标 => 生成 GEP
-        if (node.indices && !node.indices->empty())
+        // ===== 真数组：使用维度信息做扁平化索引 =====
+        if (hasDims)
         {
-            ASSERT(!dims.empty() && "有 indices 但没维度信息，记得在 alloca/形参建 reg2attr");
+            ASSERT(nIdx <= dims.size() && "多维数组下标数超过声明维度");
 
-            std::vector<Operand*> idxOps;
-            idxOps.reserve(node.indices->size());
-
-            for (auto* idxExpr : *node.indices)
+            // stride[k] = dims[k+1]*dims[k+2]*...；最后一维 stride = 1
+            std::vector<int> stride(dims.size());
+            int acc = 1;
+            for (int k = static_cast<int>(dims.size()) - 1; k >= 0; --k)
             {
-                apply(*this, *idxExpr, m);
-                size_t ir = queryExprReg(idxExpr);
-                DataType it = queryExprType(idxExpr);
-
-                // 下标统一转 i32
-                if (it != DataType::I32)
-                    ir = castTo(it, DataType::I32, ir);
-
-                idxOps.push_back(getRegOperand(ir));
+                ASSERT(dims[k] > 0 && "数组维度必须为正");
+                stride[k] = acc;
+                acc *= dims[k];
             }
 
-            size_t gepReg = getNewRegId();
-            // 元素类型从语义属性拿
+            // offset = sum_{t=0..nIdx-1} idx[t] * stride[t]
+            size_t offsetReg = getNewRegId();
+            // offset = 0
+            insert(createArithmeticI32Inst_ImmeAll(Operator::ADD, 0, 0, offsetReg));
+
+            for (size_t t = 0; t < nIdx; ++t)
+            {
+                int s = stride[t];
+
+                size_t mulReg;
+                if (s == 1)
+                {
+                    mulReg = idxRegs[t];
+                }
+                else
+                {
+                    mulReg = getNewRegId();
+                    // 如果你已经有 _ImmeLeft 版本，这里建议用：
+                    // insert(createArithmeticI32Inst_ImmeLeft(Operator::MUL, s, idxRegs[t], mulReg));
+                    insert(createArithmeticI32Inst_ImmeLeft(Operator::MUL, s, idxRegs[t], mulReg));
+                }
+
+                size_t newOffset = getNewRegId();
+                insert(createArithmeticI32Inst(Operator::ADD, offsetReg, mulReg, newOffset));
+                offsetReg = newOffset;
+            }
+
+            size_t   gepReg = getNewRegId();
             DataType elemTy = convert(node.attr.val.value.type);
             if (elemTy == DataType::I1) elemTy = DataType::I32;
 
-            insert(createGEP_I32Inst(elemTy, basePtr, dims, idxOps, gepReg));
+            // 这里 dims 不再参与 GEP 的类型构造（类型已经在 GlbVarDeclInst 里确定好了）
+            insert(createGEP_I32Inst(
+                elemTy,
+                basePtr,
+                /*dims*/ {},
+                {getRegOperand(offsetReg)},
+                gepReg));
+
             elemPtr = getRegOperand(gepReg);
         }
-
-        // 4) 不管怎样，记录“这个左值的地址”
-        lval2ptr[&node] = elemPtr;
-
-        // 5) 表达式值：统一生成（这样 queryExprReg 永远可用）
-        DataType valTy = convert(node.attr.val.value.type);
-        if (valTy == DataType::I1) valTy = DataType::I32;
-
-        // 如果语义上是“指针值”（比如数组形参、a[] 退化），直接用地址寄存器作为值
-        if (valTy == DataType::PTR && isLocal)
+        // ===== 指针/形参数组：只允许一维下标 =====
+        else
         {
-            recordExprResult(&node, localPtrReg, DataType::PTR);
-            return;
-        }
+            ASSERT(nIdx == 1 && "指针/形参数组当前仅支持一维下标访问");
 
-        // 普通标量：load
-        if (valTy == DataType::I32 || valTy == DataType::F32)
-        {
-            size_t resReg = getNewRegId();
-            insert(createLoadInst(valTy, elemPtr, resReg));
-            recordExprResult(&node, resReg, valTy);
-            return;
+            size_t   gepReg = getNewRegId();
+            DataType elemTy = convert(node.attr.val.value.type);
+            if (elemTy == DataType::I1) elemTy = DataType::I32;
+
+            insert(createGEP_I32Inst(
+                elemTy,
+                basePtr,
+                /*dims*/ {},   // 纯指针算术
+                idxOps,
+                gepReg));
+
+            elemPtr = getRegOperand(gepReg);
         }
     }
+
+    // 4) 不管怎样，记录“这个左值的地址”
+    lval2ptr[&node] = elemPtr;
+
+    // 5) 表达式值：统一生成 load（指针值的情况除外）
+    DataType valTy = convert(node.attr.val.value.type);
+    if (valTy == DataType::I1) valTy = DataType::I32;
+
+    // 数组形参/指针本身作为值：直接返回地址寄存器（局部指针）
+    if (valTy == DataType::PTR && isLocal)
+    {
+        recordExprResult(&node, localPtrReg, DataType::PTR);
+        return;
+    }
+
+    if (valTy == DataType::I32 || valTy == DataType::F32)
+    {
+        size_t resReg = getNewRegId();
+        insert(createLoadInst(valTy, elemPtr, resReg));
+        recordExprResult(&node, resReg, valTy);
+        return;
+    }
+}
 
     void ASTCodeGen::visit(FE::AST::LiteralExpr& node, Module* m)
     {
@@ -140,156 +219,129 @@ namespace ME
             recordExprResult(&node, res, DataType::I32);
     }
 
-    void ASTCodeGen::handleAssign(FE::AST::LeftValExpr& lhs, FE::AST::ExprNode& rhs, Module* m)
-    {
-        // TODO(Lab 3-2): 生成赋值语句的 IR（计算右值、类型转换、store 到左值地址）
+size_t ASTCodeGen::handleAssign(FE::AST::LeftValExpr& lhs, FE::AST::ExprNode& rhs, Module* m)
+{
+    // 1) 取 lhs 地址：标记 isLval，防止 LeftValExpr 里多做一次 load
+    bool old = lhs.isLval;
+    lhs.isLval = true;
+    apply(*this, lhs, m);
+    lhs.isLval = old;
 
-        // TODO("Lab3-2: Implement assignment IR generation");
-        // 1) lhs 取址
-        bool old = lhs.isLval;
-        lhs.isLval = true;
-        apply(*this, lhs, m);
-        lhs.isLval = old;
+    auto it = lval2ptr.find(&lhs);
+    ASSERT(it != lval2ptr.end());
+    Operand* ptr = it->second;
 
-        auto it = lval2ptr.find(&lhs);
-        ASSERT(it != lval2ptr.end());
-        Operand* ptr = it->second;
+    // 2) 计算 rhs 的值
+    apply(*this, rhs, m);
+    size_t rhsReg = queryExprReg(&rhs);
+    DataType rhsTy = queryExprType(&rhs);
 
-        // 2) rhs 求值：禁止 getMaxReg 猜
-        apply(*this, rhs, m);
-        size_t rhsReg = queryExprReg(&rhs);
-        DataType rhsTy = queryExprType(&rhs);
+    // 3) lhs 元素类型
+    DataType lhsTy = convert(lhs.attr.val.value.type);
+    if (lhsTy == DataType::I1) lhsTy = DataType::I32;
 
-        // 3) lhs 元素类型（标量/数组元素）
-        DataType lhsTy = convert(lhs.attr.val.value.type);
-        if (lhsTy == DataType::I1) lhsTy = DataType::I32; // 保持原约定
+    if (rhsTy == DataType::I1) rhsTy = DataType::I32;
+    if (rhsTy != lhsTy)
+        rhsReg = castTo(rhsTy, lhsTy, rhsReg);
 
-        // 4) rhs 转 lhs 类型
-        if (rhsTy == DataType::I1) rhsTy = DataType::I32; // bool 当 i32
-        if (rhsTy != lhsTy)
-            rhsReg = castTo(rhsTy, lhsTy, rhsReg);
+    // 4) store
+    insert(createStoreInst(lhsTy, rhsReg, ptr));
 
-        // 5) store
-        insert(createStoreInst(lhsTy, rhsReg, ptr));
+    // 5) 赋值表达式的值：再 load 一次，返回寄存器号，供 BinaryExpr 记录
+    size_t resReg = getNewRegId();
+    insert(createLoadInst(lhsTy, ptr, resReg));
+    return resReg;
+}
 
-        // 6) 赋值表达式的值：再 load 回来（简单且正确）
-        size_t resReg = getNewRegId();
-        insert(createLoadInst(lhsTy, ptr, resReg));
-    }
 
     void ASTCodeGen::handleLogicalAnd(
-        FE::AST::BinaryExpr& node, FE::AST::ExprNode& lhs, FE::AST::ExprNode& rhs, Module* m)
+    FE::AST::BinaryExpr& node, FE::AST::ExprNode& lhs, FE::AST::ExprNode& rhs, Module* m)
+{
+    // 目标：lhs 为真才计算 rhs
+    ASSERT(node.trueTar != static_cast<size_t>(-1) && node.falseTar != static_cast<size_t>(-1));
+
+    Block* rhsBlock = createBlock();
+    size_t rhsLabel = rhsBlock->blockId;
+
+    // lhs: true -> rhsLabel, false -> node.falseTar
+    lhs.trueTar  = rhsLabel;
+    lhs.falseTar = node.falseTar;
+    apply(*this, lhs, m);
+
+    // 如果 lhs 这一块最后没 terminator，则补一个 brcond
+    if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator()))
     {
-        // TODO(Lab 3-2): 生成短路与的基本块与条件分支
+        size_t   condReg = queryExprReg(&lhs);
+        DataType t       = queryExprType(&lhs);
 
-        // TODO("Lab3-2: Implement logical AND codegen");
-        // 目标：lhs 为真才计算 rhs
-        // node.trueTar/node.falseTar 已由外层设置
-        ASSERT(node.trueTar != static_cast<size_t>(-1) && node.falseTar != static_cast<size_t>(-1));
+        if (t != DataType::I1)
+            condReg = castTo(t, DataType::I1, condReg);
 
-        // 建一个 rhs block 作为 lhs=true 的落点
-        Block* rhsBlock = createBlock();
-        size_t rhsLabel = rhsBlock->blockId;
-
-        // lhs: true -> rhsLabel, false -> node.falseTar
-        lhs.trueTar = rhsLabel;
-        lhs.falseTar = node.falseTar;
-        apply(*this, lhs, m);
-
-        // 如果 lhs 没在自身里发 terminator（比如是普通表达式），这里补一个 br
-        if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator())){
-            size_t   condReg = getMaxReg();
-            DataType t       = convert(lhs.attr.val.value.type);
-
-            if (t == DataType::I32){
-                auto conv = createTypeConvertInst(DataType::I32, DataType::I1, condReg);
-                for (auto* inst : conv) insert(inst);
-                condReg = getMaxReg();
-            }
-            else if (t != DataType::I1){
-                ERROR("Logical AND lhs must be int/bool");
-            }
-
-            insert(createBranchInst(condReg, rhsLabel, node.falseTar));
-        }
-
-        // 进入 rhs block 生成 rhs，去往 node.trueTar / node.falseTar
-        enterBlock(rhsBlock);
-        rhs.trueTar = node.trueTar;
-        rhs.falseTar = node.falseTar;
-        apply(*this, rhs, m);
-
-        if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator())){
-            size_t   condReg = getMaxReg();
-            DataType t       = convert(rhs.attr.val.value.type);
-
-            if (t == DataType::I32){
-                auto conv = createTypeConvertInst(DataType::I32, DataType::I1, condReg);
-                for (auto* inst : conv) insert(inst);
-                condReg = getMaxReg();
-            }
-            else if (t != DataType::I1){
-                ERROR("Logical AND rhs must be int/bool");
-            }
-
-            insert(createBranchInst(condReg, node.trueTar, node.falseTar));
-        }
+        insert(createBranchInst(condReg, rhsLabel, node.falseTar));
     }
 
-    void ASTCodeGen::handleLogicalOr(
-        FE::AST::BinaryExpr& node, FE::AST::ExprNode& lhs, FE::AST::ExprNode& rhs, Module* m)
+    // 进入 rhs block：true -> node.trueTar, false -> node.falseTar
+    enterBlock(rhsBlock);
+    rhs.trueTar  = node.trueTar;
+    rhs.falseTar = node.falseTar;
+    apply(*this, rhs, m);
+
+    if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator()))
     {
-        // TODO(Lab 3-2): 生成短路或的基本块与条件分支
+        size_t   condReg = queryExprReg(&rhs);
+        DataType t       = queryExprType(&rhs);
 
-        // TODO("Lab3-2: Implement logical OR codegen");
-        // 目标：lhs 为假才计算 rhs
-        ASSERT(node.trueTar != static_cast<size_t>(-1) && node.falseTar != static_cast<size_t>(-1));
+        if (t != DataType::I1)
+            condReg = castTo(t, DataType::I1, condReg);
 
-        Block* rhsBlock = createBlock();
-        size_t rhsLabel = rhsBlock->blockId;
-
-        // lhs: true -> node.trueTar, false -> rhsLabel
-        lhs.trueTar = node.trueTar;
-        lhs.falseTar = rhsLabel;
-        apply(*this, lhs, m);
-
-        if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator())){
-            size_t   condReg = getMaxReg();
-            DataType t       = convert(lhs.attr.val.value.type);
-
-            if (t == DataType::I32){
-                auto conv = createTypeConvertInst(DataType::I32, DataType::I1, condReg);
-                for (auto* inst : conv) insert(inst);
-                condReg = getMaxReg();
-            }
-            else if (t != DataType::I1){
-                ERROR("Logical OR lhs must be int/bool");
-            }
-
-            insert(createBranchInst(condReg, node.trueTar, rhsLabel));
-        }
-
-        enterBlock(rhsBlock);
-        rhs.trueTar = node.trueTar;
-        rhs.falseTar = node.falseTar;
-        apply(*this, rhs, m);
-
-        if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator())){
-            size_t   condReg = getMaxReg();
-            DataType t       = convert(rhs.attr.val.value.type);
-
-            if (t == DataType::I32){
-                auto conv = createTypeConvertInst(DataType::I32, DataType::I1, condReg);
-                for (auto* inst : conv) insert(inst);
-                condReg = getMaxReg();
-            }
-            else if (t != DataType::I1){
-                ERROR("Logical OR rhs must be int/bool");
-            }
-
-            insert(createBranchInst(condReg, node.trueTar, node.falseTar));
-        }
+        insert(createBranchInst(condReg, node.trueTar, node.falseTar));
     }
+}
+
+
+void ASTCodeGen::handleLogicalOr(
+    FE::AST::BinaryExpr& node, FE::AST::ExprNode& lhs, FE::AST::ExprNode& rhs, Module* m)
+{
+    // 目标：lhs 为假才计算 rhs
+    ASSERT(node.trueTar != static_cast<size_t>(-1) && node.falseTar != static_cast<size_t>(-1));
+
+    Block* rhsBlock = createBlock();
+    size_t rhsLabel = rhsBlock->blockId;
+
+    // lhs: true -> node.trueTar, false -> rhsLabel
+    lhs.trueTar  = node.trueTar;
+    lhs.falseTar = rhsLabel;
+    apply(*this, lhs, m);
+
+    if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator()))
+    {
+        size_t   condReg = queryExprReg(&lhs);
+        DataType t       = queryExprType(&lhs);
+
+        if (t != DataType::I1)
+            condReg = castTo(t, DataType::I1, condReg);
+
+        insert(createBranchInst(condReg, node.trueTar, rhsLabel));
+    }
+
+    // rhs: true -> node.trueTar, false -> node.falseTar
+    enterBlock(rhsBlock);
+    rhs.trueTar  = node.trueTar;
+    rhs.falseTar = node.falseTar;
+    apply(*this, rhs, m);
+
+    if (curBlock && (curBlock->insts.empty() || !curBlock->insts.back()->isTerminator()))
+    {
+        size_t   condReg = queryExprReg(&rhs);
+        DataType t       = queryExprType(&rhs);
+
+        if (t != DataType::I1)
+            condReg = castTo(t, DataType::I1, condReg);
+
+        insert(createBranchInst(condReg, node.trueTar, node.falseTar));
+    }
+}
+
 
     void ASTCodeGen::visit(FE::AST::BinaryExpr& node, Module* m)
     {
@@ -299,36 +351,32 @@ namespace ME
         auto op = node.op;
 
         // 1) 赋值
-        if (op == FE::AST::Operator::ASSIGN)
-        {
-            auto* l = dynamic_cast<FE::AST::LeftValExpr*>(node.lhs);
-            ASSERT(l && "赋值左值必须是 LeftValExpr");
+if (op == FE::AST::Operator::ASSIGN)
+{
+    auto* l = dynamic_cast<FE::AST::LeftValExpr*>(node.lhs);
+    ASSERT(l && "赋值左值必须是 LeftValExpr");
 
-            // 先算出左值元素类型
-            DataType lhsTy = convert(l->attr.val.value.type);
-            if (lhsTy == DataType::I1) lhsTy = DataType::I32;
+    DataType lhsTy = convert(l->attr.val.value.type);
+    if (lhsTy == DataType::I1) lhsTy = DataType::I32;
 
-            // 生成 store + load
-            handleAssign(*l, *node.rhs, m);
-            size_t valReg = getMaxReg();      // handleAssign 最后那个 load 的结果寄存器
+    // 生成赋值 IR，并返回赋值表达式的值所在寄存器
+    size_t valReg = handleAssign(*l, *node.rhs, m);
+    recordExprResult(&node, valReg, lhsTy);
 
-            recordExprResult(&node, valReg, lhsTy);
+    // 如果赋值表达式用于条件上下文，则再生成 brcond
+    if (node.trueTar != static_cast<size_t>(-1) &&
+        node.falseTar != static_cast<size_t>(-1))
+    {
+        size_t condReg = valReg;
+        DataType ct = lhsTy;
 
-            // 如果这个赋值表达式是“条件上下文”，还要发 br
-            if (node.trueTar != static_cast<size_t>(-1) &&
-                node.falseTar != static_cast<size_t>(-1))
-            {
-                size_t condReg = valReg;
-                DataType ct = lhsTy;
+        if (ct != DataType::I1)
+            condReg = castTo(ct, DataType::I1, condReg);
 
-                // 条件统一转成 i1
-                if (ct != DataType::I1)
-                    condReg = castTo(ct, DataType::I1, condReg);
-
-                insert(createBranchInst(condReg, node.trueTar, node.falseTar));
-            }
-            return;
-        }
+        insert(createBranchInst(condReg, node.trueTar, node.falseTar));
+    }
+    return;
+}
 
         // 2) 短路逻辑
         if (op == FE::AST::Operator::AND) { handleLogicalAnd(node, *node.lhs, *node.rhs, m); return; }

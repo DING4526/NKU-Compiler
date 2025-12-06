@@ -21,3 +21,4 @@ yacc.tab.h
 
 test.o
 test.out
+test.parser

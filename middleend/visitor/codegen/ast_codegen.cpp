@@ -50,9 +50,6 @@ namespace ME
 
     void ASTCodeGen::handleGlobalVarDecl(FE::AST::VarDeclStmt* decls, Module* m)
     {
-        // TODO(Lab 3-2): 生成全局变量声明 IR（支持标量与数组的初值）
-
-        // TODO("Lab3-2: Implement global var declaration IR generation");
         ASSERT(decls && decls->decl);
         auto* vd = decls->decl;
 
@@ -65,21 +62,49 @@ namespace ME
             auto* lv = dynamic_cast<FE::AST::LeftValExpr*>(d->lval);
             ASSERT(lv);
 
-            auto itg = glbSymbols.find(lv->entry);
-            ASSERT(itg != glbSymbols.end());
-            const auto& attr = itg->second;
+            // 从符号表拷贝一份 VarAttr，方便我们在本函数里修改
+            auto itSym = glbSymbols.find(lv->entry);
+            ASSERT(itSym != glbSymbols.end());
+            FE::AST::VarAttr attr = itSym->second;
+
             std::string name = lv->entry->getName();
 
-            // 数组：直接用 VarAttr 版本（维度 + 扁平 initList 全在里面）
-            if (!attr.arrayDims.empty())
+            // ===== 1. 先判断是不是“数组声明” =====
+            bool isArrayByAst = (lv->indices && !lv->indices->empty());
+            std::vector<int> dims;
+
+            if (isArrayByAst)
             {
+                // 优先用语义阶段算好的 arrayDims
+                if (!attr.arrayDims.empty())
+                {
+                    dims = attr.arrayDims;
+                }
+                else
+                {
+                    // 退化方案：从 indices 的常量表达式里算维度
+                    for (auto* dimExpr : *lv->indices)
+                    {
+                        // 全局数组维度必须是编译期常量
+                        ASSERT(dimExpr->attr.val.isConstexpr && "global array dim must be constexpr");
+                        int dval = dimExpr->attr.val.getInt();
+                        ASSERT(dval > 0 && "array dimension must be positive");
+                        dims.push_back(dval);
+                    }
+                    attr.arrayDims = dims;  // 补回去，后面 GlbVarDeclInst 也会用到
+                }
+
+                // 记录到我们自己的表里，供 LeftValExpr 使用
+                glbArrayDims[lv->entry] = dims;
+
+                // 数组：用 VarAttr 版本（里边有 baseType + dims + 扁平 initList）
                 m->globalVars.emplace_back(new GlbVarDeclInst(base, name, attr));
                 continue;
             }
 
-            // 标量：保留你原来的逻辑
-            int   ival = 0;
-            float fval = 0.0f;
+            // ===== 2. 不是数组 => 标量全局变量 =====
+            int   ival    = 0;
+            float fval    = 0.0f;
             bool  hasInit = (d->init != nullptr);
 
             if (hasInit)

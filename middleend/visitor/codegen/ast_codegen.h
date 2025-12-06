@@ -126,6 +126,8 @@ namespace ME
             return it->second;
         }
 
+        std::unordered_map<FE::Sym::Entry*, std::vector<int>> glbArrayDims;
+
         // 统一：把某个表达式 E 的结果转换到目标类型 to，并返回“转换后寄存器”
         size_t castTo(DataType from, DataType to, size_t srcReg)
         {
@@ -145,7 +147,8 @@ namespace ME
               name2reg(),
               reg2attr(),
               paramPtrTab(),
-              lval2ptr()
+              lval2ptr(),
+              glbArrayDims()
         {}
 
       private:
@@ -179,7 +182,7 @@ namespace ME
         void visit(FE::AST::ContinueStmt& node, Module* m) override;
         void visit(FE::AST::ForStmt& node, Module* m) override;
 
-        void handleAssign(FE::AST::LeftValExpr& lhs, FE::AST::ExprNode& rhs, Module* m);
+        size_t handleAssign(FE::AST::LeftValExpr& lhs, FE::AST::ExprNode& rhs, Module* m);
         void handleLogicalAnd(FE::AST::BinaryExpr& node, FE::AST::ExprNode& lhs, FE::AST::ExprNode& rhs, Module* m);
         void handleLogicalOr(FE::AST::BinaryExpr& node, FE::AST::ExprNode& lhs, FE::AST::ExprNode& rhs, Module* m);
 

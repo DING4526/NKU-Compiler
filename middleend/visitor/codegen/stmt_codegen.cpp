@@ -74,50 +74,25 @@ namespace ME
 
                 size_t incomingReg = fdef->argRegs[i].second->getRegNum();
 
-                if (isPtrParam)
-                {
-                    // 形参本身就是“地址”
-                    name2reg.addSymbol(p->entry, incomingReg);
+if (isPtrParam)
+{
+    // 形参本身就是“地址”
+    name2reg.addSymbol(p->entry, incomingReg);
 
-                    // 为数组/指针形参构造 dims，填进 reg2attr
-                    std::vector<int> dims;
-                    if (p->dims && !p->dims->empty())
-                    {
-                        dims.reserve(p->dims->size());
-                        for (auto* dimExpr : *p->dims)
-                        {
-                            int d = -1;  // 不可求值/省略时用 -1
-                            if (dimExpr && dimExpr->attr.val.isConstexpr)
-                                d = dimExpr->attr.val.getInt();   // 例如 int b[4][1024]
-                            dims.push_back(d);
-                        }
-                    }
-                    else
-                    {
-                        // 防御性：int *p 这类也当 1 维未知长度
-                        dims.push_back(-1);
-                    }
+    // ★ 注意：不要给 pointer 参数填 reg2attr.arrayDims！
+    // reg2attr[incomingReg] = ...    // 这类代码直接删掉
+}
+else
+{
+    // 普通标量参数：alloca + store 到栈上
+    DataType pt = convert(p->type);
+    if (pt == DataType::I1) pt = DataType::I32;
 
-                    reg2attr[incomingReg] = FE::AST::VarAttr(
-                        p->type,          // AST 上的原始类型（base 是 int / float）
-                        /*isConstDecl*/ false,
-                        /*level*/ -1,
-                        dims,
-                        {}                // initList 对形参无意义
-                    );
-                }
-                else
-                {
-                    // 非指针形参：在栈上 alloca 再 store，后续当局部变量用
-                    DataType pt = convert(p->type);
-                    if (pt == DataType::I1) pt = DataType::I32;
-
-                    size_t ptrReg = getNewRegId();
-                    insert(createAllocaInst(pt, ptrReg));
-                    insert(createStoreInst(pt, incomingReg, getRegOperand(ptrReg)));
-
-                    name2reg.addSymbol(p->entry, ptrReg);
-                }
+    size_t ptrReg = getNewRegId();
+    insert(createAllocaInst(pt, ptrReg));
+    insert(createStoreInst(pt, incomingReg, getRegOperand(ptrReg)));
+    name2reg.addSymbol(p->entry, ptrReg);
+}
             }
         }
 
