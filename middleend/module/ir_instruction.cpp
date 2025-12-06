@@ -124,25 +124,36 @@ namespace ME
 
         s << "]";
     }
+
     std::string GlbVarDeclInst::toString() const
     {
         std::stringstream ss;
         ss << "@" << name << " = global ";
-        if (initList.arrayDims.empty())
+
+        // 如果是数组（attr / initList 里有维度信息）
+        if (!initList.arrayDims.empty())
         {
+            // 让 initArrayGlb 直接把 “类型 + 初始值” 全写进去
+            initArrayGlb(
+                ss,
+                dt,              // I32 / F32
+                initList,        // 这里是 VarAttr
+                /*dimDph*/ 0,
+                /*beginPos*/ 0,
+                /*endPos*/ initList.initList.empty()
+                                ? 0
+                                : initList.initList.size() - 1);
+        }
+        else
+        {
+            // 标量全局变量（你前面 handleGlobalVarDecl(base,name,initOp) 的那条）
             ss << dt << " ";
-            if (init)
+            if (init)           // 构造函数里应该有存进来的 Operand*，名字你自己对一下
                 ss << init;
             else
                 ss << "zeroinitializer";
         }
-        else
-        {
-            size_t step = 1;
-            for (int dim : initList.arrayDims) step *= dim;
-            initArrayGlb(ss, dt, initList, 0, 0, step - 1);
-        }
-        ss << getComment();
+
         return ss.str();
     }
 
