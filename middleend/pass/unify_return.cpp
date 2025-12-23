@@ -3,7 +3,6 @@
 #include <middleend/pass/analysis/cfg.h>
 #include <middleend/module/ir_operand.h>
 #include <algorithm>
-#include <iostream>
 
 namespace ME
 {
