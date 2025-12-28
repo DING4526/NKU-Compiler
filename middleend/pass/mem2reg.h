@@ -27,7 +27,6 @@ namespace ME
         bool isPromotable(AllocaInst* allocaInst, const std::map<AllocaInst*, std::vector<Instruction*>>& allocaUsers);
         void rename(Block* block);
         void replaceOperands(Instruction* inst);
-        void removeDeadCode(Function& function);
 
         Analysis::DomInfo* domInfo;
         std::map<AllocaInst*, std::stack<Operand*>> stacks;
