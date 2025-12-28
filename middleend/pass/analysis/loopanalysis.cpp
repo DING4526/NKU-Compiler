@@ -35,7 +35,6 @@ namespace ME::Analysis
         // Step 1: find back edges u -> v (v dominates u). Each back edge forms a natural loop.
         for (const auto& [blockId, block] : cfg.id2block)
         {
-            (void)block;
             int u = (int)blockId;
             if ((size_t)u >= cfg.G_id.size()) continue;
 

@@ -1,7 +1,10 @@
+#include "middleend/ir_defs.h"
+#include <cstddef>
 #include <middleend/pass/mem2reg.h>
 #include <middleend/pass/analysis/analysis_manager.h>
 #include <middleend/pass/analysis/cfg.h>
 #include <middleend/module/ir_operand.h>
+#include <unordered_map>
 
 namespace ME
 {
@@ -21,10 +24,11 @@ namespace ME
         instsToRemove.clear();
         promotableRegMap.clear();
         id2block.clear();
+        if(function.blocks.empty()) return;
 
         for(auto& [id, block] : function.blocks) id2block[id] = block;
 
-        // 1. Identify Promotable Allocas
+        // 找出所有可行reg
         std::map<AllocaInst*, std::vector<Instruction*>> allocaUsers;
         std::map<size_t, AllocaInst*> regToAlloca;
 
@@ -48,13 +52,10 @@ namespace ME
             for (auto* inst : block->insts)
             {
                 auto check = [&](Operand* op) {
-                    if (op && op->getType() == OperandType::REG)
-                    {
+                    if (op && op->getType() == OperandType::REG) {
                         auto it = regToAlloca.find(op->getRegNum());
                         if (it != regToAlloca.end())
-                        {
                             allocaUsers[it->second].push_back(inst);
-                        }
                     }
                 };
 
@@ -152,15 +153,16 @@ namespace ME
         {
             if (isPromotable(allocaInst, allocaUsers))
             {
-                promotableAllocas.push_back(allocaInst);
-                promotableRegMap[reg] = allocaInst;
+                if(allocaUsers.find(allocaInst) != allocaUsers.end())
+                    promotableAllocas.push_back(allocaInst),
+                    promotableRegMap[reg] = allocaInst;
                 instsToRemove.insert(allocaInst);
             }
         }
 
         if (promotableAllocas.empty()) return;
 
-        // 2. Compute Dominance Frontiers & Insert Phis
+        // 通过支配边界插入 phi 函数
         const auto& domFrontier = domInfo->getDomFrontier();
         std::map<Instruction*, Block*> instToBlock;
         for(auto& [id, block] : function.blocks) {
@@ -168,28 +170,22 @@ namespace ME
         }
         for (auto* allocaInst : promotableAllocas)
         {
-            std::set<size_t> defBlocks;
+            std::vector<size_t> W;
+            std::unordered_map<size_t, int> defBlocks;
             for (auto* user : allocaUsers[allocaInst])
             {
                 if (auto* store = dynamic_cast<StoreInst*>(user))
-                {
-                    if (store->ptr->getRegNum() == allocaInst->res->getRegNum())
-                    {
-                        defBlocks.insert(instToBlock[store]->blockId);
-                    }
-                }
+                    W.emplace_back(instToBlock[store]->blockId),
+                    defBlocks[instToBlock[store]->blockId] = 1;
             }
 
-            std::set<size_t> F;
-            std::vector<size_t> W(defBlocks.begin(), defBlocks.end());
+            std::unordered_map<size_t, int> F;
             
-            size_t idx = 0;
-            while(idx < W.size()) {
-                size_t X = W[idx++];
+            for(size_t idx = 0, X = W[0]; idx < W.size(); X = W[++idx]) {
                 if (X >= domFrontier.size()) continue;
                 for(int Y_id : domFrontier[X]) {
                     if(F.find(Y_id) == F.end()) {
-                        F.insert(Y_id);
+                        F[Y_id] = 1;
                         if(defBlocks.find(Y_id) == defBlocks.end()) {
                             W.push_back(Y_id);
                         }
@@ -204,27 +200,15 @@ namespace ME
             }
         }
 
-        // 3. Rename
-        Block* entryBlock = nullptr;
-        if (function.blocks.count(0)) entryBlock = function.blocks[0];
-        else if (!function.blocks.empty()) entryBlock = function.blocks.begin()->second;
-        
-        if (entryBlock) rename(entryBlock);
-        // 4. Remove instructions
+        // Rename
+        rename(function.blocks[0]);
+        // 删除无用代码
         for (auto& [id, block] : function.blocks)
-        {
-            auto it = block->insts.begin();
-            while (it != block->insts.end())
-            {
-                if (instsToRemove.count(*it))
-                {
-                    // delete *it; // Optional: delete instruction memory
+        {   
+            for(auto it = block->insts.begin(); it != block->insts.end(); ) {
+                if(instsToRemove.find(*it) != instsToRemove.end())
                     it = block->insts.erase(it);
-                }
-                else
-                {
-                    ++it;
-                }
+                else ++it;
             }
         }
     }
@@ -237,21 +221,8 @@ namespace ME
         if (it == allocaUsers.end()) return true;
 
         for (auto* user : it->second)
-        {
-            if (auto* load = dynamic_cast<LoadInst*>(user))
-            {
-                if (load->ptr->getRegNum() != allocaInst->res->getRegNum()) return false;
-            }
-            else if (auto* store = dynamic_cast<StoreInst*>(user))
-            {
-                if (store->ptr->getRegNum() != allocaInst->res->getRegNum()) return false;
-                if (store->val->getType() == OperandType::REG && store->val->getRegNum() == allocaInst->res->getRegNum()) return false;
-            }
-            else
-            {
+            if(user->opcode != Operator::STORE && user->opcode != Operator::LOAD)
                 return false;
-            }
-        }
         return true;
     }
 
@@ -269,7 +240,7 @@ namespace ME
                     stacks[alloca].push(phi->res);
                     pushCount[alloca]++;
                 }
-            }
+            } else break;
         }
 
         for (auto* inst : block->insts)
@@ -321,16 +292,15 @@ namespace ME
                          }
                          phi->addIncoming(val, getLabelOperand(block->blockId));
                      }
-                 }
+                 } else break;
              }
         }
 
         const auto& domTreeNodes = domInfo->getDomTree();
-        if (block->blockId < domTreeNodes.size()) {
-            for (int childId : domTreeNodes[block->blockId]) {
-                if (id2block.count(childId)) rename(id2block[childId]);
-            }
+        for (int childId : domTreeNodes[block->blockId]) {
+            if (id2block.count(childId)) rename(id2block[childId]);
         }
+
 
         for (auto& [alloca, count] : pushCount) {
             for (int i = 0; i < count; ++i) stacks[alloca].pop();

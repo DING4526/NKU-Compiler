@@ -6,7 +6,7 @@
 #include <middleend/module/ir_function.h>
 #include <middleend/module/ir_block.h>
 #include <middleend/module/ir_instruction.h>
-#include <middleend/pass/analysis/dominfo.h>
+
 
 namespace ME {
     class ADCEPass : public FunctionPass {

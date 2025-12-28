@@ -1,13 +1,13 @@
 #include "middleend/module/ir_function.h"
 
-#include <algorithm>
 #include <deque>
-#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include <middleend/module/ir_operand.h>
+#include <middleend/pass/analysis/analysis_manager.h>
+#include <middleend/pass/analysis/loopanalysis.h>
 #include <middleend/pass/adce.h>
 
 namespace ME
@@ -175,6 +175,9 @@ namespace ME
         {
             changed = false;
 
+            // IR may have changed in previous iteration; refresh cached analyses (CFG/Dom/Loop).
+            ME::Analysis::AM.invalidate(function);
+
             // Map blocks to dense indices (stable within this iteration)
             std::vector<size_t> blockIds;
             blockIds.reserve(function.blocks.size());
@@ -188,7 +191,9 @@ namespace ME
             // Build def map: reg -> defining instruction
             std::unordered_map<size_t, Instruction*> regDef;
             regDef.reserve(function.getMaxReg() + 8);
-            for (auto& [_, block] : function.blocks)
+            std::unordered_map<size_t, size_t> regDefBlock;
+            regDefBlock.reserve(function.getMaxReg() + 8);
+            for (auto& [bid, block] : function.blocks)
             {
                 for (auto* inst : block->insts)
                 {
@@ -196,6 +201,7 @@ namespace ME
                     if (def && def->getType() == OperandType::REG)
                     {
                         regDef[def->getRegNum()] = inst;
+                        regDefBlock[def->getRegNum()] = bid;
                     }
                 }
             }
@@ -234,265 +240,108 @@ namespace ME
                 }
             }
 
-            // CFG successors for reachability computation
-            const size_t N = blockIds.size();
-            std::vector<std::vector<size_t>> succIdx(N);
-            for (auto& [bid, block] : function.blocks)
+            // Fold dead-loop exits using LoopAnalysis.
+            // We do this *before* marking BR_COND as live, so that a pure control loop with no
+            // side effects and no externally-used values can be skipped (avoid TLE on dead loops).
+            auto* loopInfo = ME::Analysis::AM.get<ME::Analysis::LoopAnalysis>(function);
+            if (loopInfo)
             {
-                auto itIdx = id2idx.find(bid);
-                if (itIdx == id2idx.end()) continue;
-                size_t bidx = itIdx->second;
+                const auto& loops = loopInfo->getLoops();
 
-                if (block->insts.empty()) continue;
-                Instruction* term = block->insts.back();
-                if (!term || !term->isTerminator()) continue;
-
-                if (term->opcode == Operator::BR_COND)
+                // Precompute: block -> loops it belongs to (innermost + all parents are included).
+                std::unordered_map<int, std::vector<size_t>> block2loops;
+                block2loops.reserve(function.blocks.size() * 2);
+                for (size_t i = 0; i < loops.size(); ++i)
                 {
-                    auto* br = static_cast<BrCondInst*>(term);
-                    if (br->trueTar && br->trueTar->getType() == OperandType::LABEL)
-                    {
-                        size_t tid = static_cast<LabelOperand*>(br->trueTar)->lnum;
-                        if (id2idx.count(tid)) succIdx[bidx].push_back(id2idx[tid]);
-                    }
-                    if (br->falseTar && br->falseTar->getType() == OperandType::LABEL)
-                    {
-                        size_t fid = static_cast<LabelOperand*>(br->falseTar)->lnum;
-                        if (id2idx.count(fid)) succIdx[bidx].push_back(id2idx[fid]);
-                    }
-                }
-                else if (term->opcode == Operator::BR_UNCOND)
-                {
-                    auto* br = static_cast<BrUncondInst*>(term);
-                    if (br->target && br->target->getType() == OperandType::LABEL)
-                    {
-                        size_t tid = static_cast<LabelOperand*>(br->target)->lnum;
-                        if (id2idx.count(tid)) succIdx[bidx].push_back(id2idx[tid]);
-                    }
-                }
-            }
-
-            // Live blocks: blocks containing any live instruction (side effects or needed defs)
-            std::vector<bool> blockIsLive(N, false);
-            for (auto& [bid, block] : function.blocks)
-            {
-                size_t bidx = id2idx[bid];
-                for (auto* inst : block->insts)
-                {
-                    if (live.count(inst))
-                    {
-                        blockIsLive[bidx] = true;
-                        break;
-                    }
-                }
-            }
-
-            // Compute SCCs of the CFG (Tarjan) and fold dead-loop exits.
-            std::vector<int> index(N, -1), lowlink(N, -1), onstack(N, 0);
-            std::vector<size_t> st;
-            st.reserve(N);
-            int idxCounter = 0;
-            int sccCounter = 0;
-            std::vector<int> sccId(N, -1);
-
-            std::function<void(size_t)> strongconnect = [&](size_t v) {
-                index[v] = lowlink[v] = idxCounter++;
-                st.push_back(v);
-                onstack[v] = 1;
-
-                for (size_t w : succIdx[v])
-                {
-                    if (index[w] == -1)
-                    {
-                        strongconnect(w);
-                        lowlink[v] = std::min(lowlink[v], lowlink[w]);
-                    }
-                    else if (onstack[w])
-                    {
-                        lowlink[v] = std::min(lowlink[v], index[w]);
-                    }
+                    for (int b : loops[i].blocks) block2loops[b].push_back(i);
                 }
 
-                if (lowlink[v] == index[v])
+                std::vector<bool> loopHasLive(loops.size(), false);
+                for (size_t i = 0; i < loops.size(); ++i)
                 {
-                    while (true)
+                    for (int b : loops[i].blocks)
                     {
-                        size_t w = st.back();
-                        st.pop_back();
-                        onstack[w] = 0;
-                        sccId[w] = sccCounter;
-                        if (w == v) break;
-                    }
-                    sccCounter++;
-                }
-            };
-
-            for (size_t v = 0; v < N; v++)
-            {
-                if (index[v] == -1) strongconnect(v);
-            }
-
-            // Detect SCCs that define values used outside the SCC.
-            // If an SCC produces a value consumed elsewhere, we must not fold it away as a “dead loop”.
-            std::unordered_map<size_t, int> regDefScc;
-            regDefScc.reserve(function.getMaxReg() + 8);
-            for (auto& [bid, block] : function.blocks)
-            {
-                size_t bidx = id2idx[bid];
-                int    sid  = sccId[bidx];
-                for (auto* inst : block->insts)
-                {
-                    Operand* def = getDefOperand(inst);
-                    if (def && def->getType() == OperandType::REG)
-                    {
-                        regDefScc[def->getRegNum()] = sid;
-                    }
-                }
-            }
-
-            std::vector<bool> sccHasExternalRegUse(sccCounter, false);
-            for (auto& [bid, block] : function.blocks)
-            {
-                size_t bidx   = id2idx[bid];
-                int    useScc = sccId[bidx];
-                for (auto* inst : block->insts)
-                {
-                    std::vector<Operand*> uses;
-                    uses.reserve(4);
-                    collectUseOperands(inst, uses);
-                    for (auto* op : uses)
-                    {
-                        if (!op || op->getType() != OperandType::REG) continue;
-                        auto it = regDefScc.find(op->getRegNum());
-                        if (it != regDefScc.end() && it->second != useScc)
+                        Block* blk = function.getBlock((size_t)b);
+                        if (!blk) continue;
+                        for (auto* inst : blk->insts)
                         {
-                            sccHasExternalRegUse[it->second] = true;
+                            if (live.count(inst))
+                            {
+                                loopHasLive[i] = true;
+                                break;
+                            }
+                        }
+                        if (loopHasLive[i]) break;
+                    }
+                }
+
+                std::vector<bool> loopHasExternalRegUse(loops.size(), false);
+                for (auto& [bid, block] : function.blocks)
+                {
+                    for (auto* inst : block->insts)
+                    {
+                        std::vector<Operand*> uses;
+                        uses.reserve(4);
+                        collectUseOperands(inst, uses);
+                        for (auto* op : uses)
+                        {
+                            if (!op || op->getType() != OperandType::REG) continue;
+                            auto itDefBlk = regDefBlock.find(op->getRegNum());
+                            if (itDefBlk == regDefBlock.end()) continue;
+
+                            int defBlk = (int)itDefBlk->second;
+                            int useBlk = (int)bid;
+                            auto itLoops = block2loops.find(defBlk);
+                            if (itLoops == block2loops.end()) continue;
+
+                            for (size_t loopIdx : itLoops->second)
+                            {
+                                if (!loops[loopIdx].blocks.count(useBlk))
+                                {
+                                    loopHasExternalRegUse[loopIdx] = true;
+                                }
+                            }
                         }
                     }
                 }
-            }
 
-            std::vector<bool> sccHasLive(sccCounter, false);
-            for (size_t v = 0; v < N; v++)
-            {
-                if (blockIsLive[v]) sccHasLive[sccId[v]] = true;
-            }
-
-            // More conservative for control-flow: track SCCs that (directly or indirectly)
-            // can reach any inherently-live instruction (CALL/STORE/RET). This helps avoid
-            // folding loops that choose between different observable outcomes (e.g., different RETs).
-            std::vector<bool> sccHasInherent(sccCounter, false);
-            for (auto& [bid, block] : function.blocks)
-            {
-                size_t bidx = id2idx[bid];
-                int    sid  = sccId[bidx];
-                for (auto* inst : block->insts)
+                for (size_t i = 0; i < loops.size(); ++i)
                 {
-                    if (isInherentlyLive(inst))
+                    if (loopHasLive[i]) continue;
+                    if (loopHasExternalRegUse[i]) continue;
+                    if (loops[i].exits.size() != 1) continue;
+
+                    int exitBlk = *loops[i].exits.begin();
+
+                    for (int b : loops[i].blocks)
                     {
-                        sccHasInherent[sid] = true;
-                        break;
-                    }
-                }
-            }
+                        Block* blk = function.getBlock((size_t)b);
+                        if (!blk || blk->insts.empty()) continue;
+                        Instruction* term = blk->insts.back();
+                        if (!term || term->opcode != Operator::BR_COND) continue;
 
-            std::vector<std::unordered_set<int>> sccSuccSet(sccCounter);
-            for (size_t v = 0; v < N; v++)
-            {
-                int sv = sccId[v];
-                for (size_t w : succIdx[v])
-                {
-                    int sw = sccId[w];
-                    if (sv != sw) sccSuccSet[sv].insert(sw);
-                }
-            }
+                        auto* br = static_cast<BrCondInst*>(term);
+                        if (!br->trueTar || !br->falseTar) continue;
+                        if (br->trueTar->getType() != OperandType::LABEL || br->falseTar->getType() != OperandType::LABEL)
+                            continue;
 
-            std::vector<bool> sccCanReachInherent = sccHasInherent;
-            bool              reachChanged        = true;
-            while (reachChanged)
-            {
-                reachChanged = false;
-                for (int s = 0; s < sccCounter; s++)
-                {
-                    if (sccCanReachInherent[s]) continue;
-                    for (int t : sccSuccSet[s])
-                    {
-                        if (sccCanReachInherent[t])
+                        int t = (int)static_cast<LabelOperand*>(br->trueTar)->lnum;
+                        int f = (int)static_cast<LabelOperand*>(br->falseTar)->lnum;
+
+                        bool tIn = loops[i].blocks.count(t) != 0;
+                        bool fIn = loops[i].blocks.count(f) != 0;
+
+                        // Must decide between staying in the loop and exiting via the unique exit.
+                        if (tIn && !fIn && f == exitBlk)
                         {
-                            sccCanReachInherent[s] = true;
-                            reachChanged           = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            auto uniqueLiveExitScc = [&](int scc) -> int {
-                int unique = -1;
-                for (int t : sccSuccSet[scc])
-                {
-                    if (!sccCanReachInherent[t]) continue;
-                    if (unique == -1)
-                    {
-                        unique = t;
-                    }
-                    else if (unique != t)
-                    {
-                        return -2;  // multiple
-                    }
-                }
-                return unique;  // -1 none, >=0 unique, -2 multiple
-            };
-
-            // Only fold BR_COND when it decides whether to stay inside a dead SCC (dead loop)
-            // or exit to a different SCC.
-            for (auto& [bid, block] : function.blocks)
-            {
-                if (block->insts.empty()) continue;
-                Instruction* term = block->insts.back();
-                if (!term || term->opcode != Operator::BR_COND) continue;
-
-                auto* br = static_cast<BrCondInst*>(term);
-                if (!br->trueTar || !br->falseTar) continue;
-                if (br->trueTar->getType() != OperandType::LABEL || br->falseTar->getType() != OperandType::LABEL)
-                    continue;
-
-                size_t tid = static_cast<LabelOperand*>(br->trueTar)->lnum;
-                size_t fid = static_cast<LabelOperand*>(br->falseTar)->lnum;
-                if (!id2idx.count(bid) || !id2idx.count(tid) || !id2idx.count(fid)) continue;
-
-                size_t bidx = id2idx[bid];
-                size_t tidx = id2idx[tid];
-                size_t fidx = id2idx[fid];
-
-                int sccB = sccId[bidx];
-                int sccT = sccId[tidx];
-                int sccF = sccId[fidx];
-
-                // If taking one edge keeps us in the same SCC and the other leaves it,
-                // we can skip the SCC ONLY when:
-                // - the SCC has no dataflow-live instructions (does not compute values used later)
-                // - and it has a single live exit (does not choose between different observable outcomes)
-                // This approximates safe removal of dead loops.
-                if (!sccHasLive[sccB] && !sccHasExternalRegUse[sccB])
-                {
-                    if (sccT == sccB && sccF != sccB)
-                    {
-                        int u = uniqueLiveExitScc(sccB);
-                        if (u >= 0 && u == sccF)
-                        {
-                            block->insts.pop_back();
-                            block->insts.push_back(new BrUncondInst(br->falseTar, br->comment));
+                            blk->insts.pop_back();
+                            blk->insts.push_back(new BrUncondInst(br->falseTar, br->comment));
                             changed = true;
                         }
-                    }
-                    else if (sccF == sccB && sccT != sccB)
-                    {
-                        int u = uniqueLiveExitScc(sccB);
-                        if (u >= 0 && u == sccT)
+                        else if (fIn && !tIn && t == exitBlk)
                         {
-                            block->insts.pop_back();
-                            block->insts.push_back(new BrUncondInst(br->trueTar, br->comment));
+                            blk->insts.pop_back();
+                            blk->insts.push_back(new BrUncondInst(br->trueTar, br->comment));
                             changed = true;
                         }
                     }

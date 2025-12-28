@@ -60,9 +60,7 @@ void DomAnalyzer::solve(const vector<vector<int>>& graph, const vector<int>& ent
         working_graph.push_back(vector<int>());
         for (int exit : entry_points) working_graph[virtual_source].push_back(exit);
     }
-    std::cerr << "start build\n";
     build(working_graph, node_count + 1, virtual_source, entry_points);
-    std::cerr << "done building\n";
 }
 
 void DomAnalyzer::build(

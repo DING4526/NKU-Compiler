@@ -1,11 +1,8 @@
 #ifndef __INTERFACES_MIDDLEEND_ANALYSIS_MANAGER_H__
 #define __INTERFACES_MIDDLEEND_ANALYSIS_MANAGER_H__
 
-#include <functional>
-#include <set>
 #include <type_utils.h>
 #include <unordered_map>
-#include <vector>
 
 /*
  * 中端分析管理器 (Analysis Manager)

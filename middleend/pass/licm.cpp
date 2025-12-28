@@ -8,7 +8,6 @@
 #include <middleend/pass/analysis/dominfo.h>
 #include <middleend/pass/analysis/loopanalysis.h>
 
-#include <algorithm>
 #include <deque>
 #include <queue>
 #include <set>
