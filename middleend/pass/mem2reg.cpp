@@ -284,6 +284,13 @@ namespace ME
                     AllocaInst* alloca = promotableRegMap[load->ptr->getRegNum()];
                     if (!stacks[alloca].empty()) {
                         regReplacements[load->res->getRegNum()] = stacks[alloca].top();
+                    } else {
+                        // If a value is read before any store reaches here, fall back to a
+                        // deterministic default to keep IR well-formed.
+                        Operand* defVal = nullptr;
+                        if (alloca->dt == DataType::F32) defVal = getImmeF32Operand(0.0f);
+                        else defVal = getImmeI32Operand(0);
+                        regReplacements[load->res->getRegNum()] = defVal;
                     }
                     instsToRemove.insert(load);
                 }
@@ -403,7 +410,7 @@ namespace ME
             case Operator::GETELEMENTPTR: {
                 auto* i = static_cast<GEPInst*>(inst);
                 replace(i->basePtr);
-                for (auto* idx : i->idxs) replace(idx);
+                for (auto*& idx : i->idxs) replace(idx);
                 break;
             }
             case Operator::SITOFP: {
