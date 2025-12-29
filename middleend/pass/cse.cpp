@@ -99,7 +99,7 @@ namespace ME
                 {
                     case Operator::PHI: {
                         auto* p = static_cast<PhiInst*>(inst);
-                        // incomingVals: map<label, value> (你项目里是 pair.second 为 val)
+                        // incomingVals: map<label, value> (pair.second 为 val)
                         for (auto& kv : p->incomingVals) addUse(bid, kv.second);
                         break;
                     }
@@ -241,8 +241,7 @@ namespace ME
                         if (res && res->getType() == OperandType::REG)
                         {
                             size_t r = res->getRegNum();
-
-                            // NEW: 如果结果逃逸出本块，则不能删除这条定义，否则会出现 phi 引用未定义
+                            // 如果结果逃逸出本块，则不能删除这条定义，否则会出现 phi 引用未定义
                             if (!resultEscapesBlock(r, block->blockId))
                             {
                                 regRepl[r] = it->second;
@@ -250,10 +249,7 @@ namespace ME
                             }
                             else
                             {
-                                // 可选：仍然在本块内替换后续使用（安全），但不要删除定义
-                                // 这里做不做都行；做了通常更优化一些
                                 regRepl[r] = it->second;
-                                // 不 insert(inst)
                             }
                         }
 
