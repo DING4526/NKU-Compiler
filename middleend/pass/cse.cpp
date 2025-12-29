@@ -79,8 +79,140 @@ namespace ME
         }
     }
 
+    void CSEPass::buildUseBlocks(Function& function)
+    {
+        regUseBlocks.clear();
+
+        auto addUse = [&](size_t bid, Operand* op) {
+            if (!op) return;
+            if (op->getType() == OperandType::REG)
+                regUseBlocks[op->getRegNum()].insert(bid);
+        };
+
+        for (auto& [bid, block] : function.blocks)
+        {
+            for (auto* inst : block->insts)
+            {
+                if (!inst) continue;
+
+                switch (inst->opcode)
+                {
+                    case Operator::PHI: {
+                        auto* p = static_cast<PhiInst*>(inst);
+                        // incomingVals: map<label, value> (你项目里是 pair.second 为 val)
+                        for (auto& kv : p->incomingVals) addUse(bid, kv.second);
+                        break;
+                    }
+                    case Operator::LOAD: {
+                        auto* i = static_cast<LoadInst*>(inst);
+                        addUse(bid, i->ptr);
+                        break;
+                    }
+                    case Operator::STORE: {
+                        auto* i = static_cast<StoreInst*>(inst);
+                        addUse(bid, i->ptr);
+                        addUse(bid, i->val);
+                        break;
+                    }
+                    case Operator::ADD:
+                    case Operator::SUB:
+                    case Operator::MUL:
+                    case Operator::DIV:
+                    case Operator::MOD:
+                    case Operator::FADD:
+                    case Operator::FSUB:
+                    case Operator::FMUL:
+                    case Operator::FDIV:
+                    case Operator::BITAND:
+                    case Operator::BITXOR:
+                    case Operator::SHL:
+                    case Operator::LSHR:
+                    case Operator::ASHR: {
+                        auto* i = static_cast<ArithmeticInst*>(inst);
+                        addUse(bid, i->lhs);
+                        addUse(bid, i->rhs);
+                        break;
+                    }
+                    case Operator::ICMP: {
+                        auto* i = static_cast<IcmpInst*>(inst);
+                        addUse(bid, i->lhs);
+                        addUse(bid, i->rhs);
+                        break;
+                    }
+                    case Operator::FCMP: {
+                        auto* i = static_cast<FcmpInst*>(inst);
+                        addUse(bid, i->lhs);
+                        addUse(bid, i->rhs);
+                        break;
+                    }
+                    case Operator::BR_COND: {
+                        auto* i = static_cast<BrCondInst*>(inst);
+                        addUse(bid, i->cond);
+                        break;
+                    }
+                    case Operator::CALL: {
+                        auto* i = static_cast<CallInst*>(inst);
+                        for (auto& arg : i->args) addUse(bid, arg.second);
+                        break;
+                    }
+                    case Operator::RET: {
+                        auto* i = static_cast<RetInst*>(inst);
+                        addUse(bid, i->res);
+                        break;
+                    }
+                    case Operator::GETELEMENTPTR: {
+                        auto* i = static_cast<GEPInst*>(inst);
+                        addUse(bid, i->basePtr);
+                        for (auto* idx : i->idxs) addUse(bid, idx);
+                        break;
+                    }
+                    case Operator::SITOFP: {
+                        auto* i = static_cast<SI2FPInst*>(inst);
+                        addUse(bid, i->src);
+                        break;
+                    }
+                    case Operator::FPTOSI: {
+                        auto* i = static_cast<FP2SIInst*>(inst);
+                        addUse(bid, i->src);
+                        break;
+                    }
+                    case Operator::ZEXT: {
+                        auto* i = static_cast<ZextInst*>(inst);
+                        addUse(bid, i->src);
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            }
+        }
+    }
+
+    bool CSEPass::resultEscapesBlock(size_t reg, size_t curBlockId) const
+    {
+        auto it = regUseBlocks.find(reg);
+        if (it == regUseBlocks.end())
+        {
+            // 没有 use：严格说可以删，但可能是后续 pass 才会用？
+            // 这里保守起见：认为“不逃逸”，允许删（ADCE 也会处理）
+            return false;
+        }
+
+        const auto& uses = it->second;
+        if (uses.empty()) return false;
+
+        // 只在当前块用 => 不逃逸
+        if (uses.size() == 1 && uses.count(curBlockId)) return false;
+
+        // 在其他块也用 => 逃逸（尤其 PHI）
+        return true;
+    }
+
+
     void CSEPass::runOnFunction(Function& function)
     {
+        buildUseBlocks(function);
+
         // 对每个基本块做 local CSE
         for (auto& [id, block] : function.blocks)
         {
@@ -108,9 +240,23 @@ namespace ME
 
                         if (res && res->getType() == OperandType::REG)
                         {
-                            regRepl[res->getRegNum()] = it->second;
-                            instsToRemove.insert(inst);
+                            size_t r = res->getRegNum();
+
+                            // NEW: 如果结果逃逸出本块，则不能删除这条定义，否则会出现 phi 引用未定义
+                            if (!resultEscapesBlock(r, block->blockId))
+                            {
+                                regRepl[r] = it->second;
+                                instsToRemove.insert(inst);
+                            }
+                            else
+                            {
+                                // 可选：仍然在本块内替换后续使用（安全），但不要删除定义
+                                // 这里做不做都行；做了通常更优化一些
+                                regRepl[r] = it->second;
+                                // 不 insert(inst)
+                            }
                         }
+
                     }
                     else
                     {

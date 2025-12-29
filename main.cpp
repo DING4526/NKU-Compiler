@@ -333,8 +333,8 @@ int main(int argc, char** argv)
             ME::ADCEPass adcepass;
             ME::ScalarLICMPass licmpass;
             unifyReturnPass.runOnModule(m);
-            csepass.runOnModule(m);
             mem2regpass.runOnModule(m);
+            csepass.runOnModule(m);
             licmpass.runOnModule(m);
             adcepass.runOnModule(m);
         }

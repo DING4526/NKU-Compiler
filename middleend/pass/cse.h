@@ -43,11 +43,14 @@ namespace ME
 
         // Compare two operands for ordering (returns true if a < b)
         bool operandLessThan(Operand* a, Operand* b) const;
-
+        
         // Maps for CSE
         std::map<std::string, Operand*> expr2value;  // expression key -> computed result
         std::map<size_t, Operand*> regRepl;          // old reg -> replacement operand
         std::set<Instruction*> instsToRemove;
+        std::map<size_t, std::set<size_t>> regUseBlocks;  // reg -> blocks where this reg is USED (including phi incoming)
+        void buildUseBlocks(Function& function);
+        bool resultEscapesBlock(size_t reg, size_t curBlockId) const;
     };
 
 }  // namespace ME
