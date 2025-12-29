@@ -12,6 +12,19 @@
 #include <tuple>
 #include <string>
 
+/* runOnFunction(function) 实现局部公共子表达式消除（CSE）
+  思路：
+  1.先统计每个 reg 在哪些块被用（尤其把 phi incoming 算进去）
+  2.对每个块，从前往后：
+    - 先把操作数替换成已知等价值
+    - 把纯计算指令转成 key
+    - key 见过 → 当前指令冗余：
+      - 结果 reg 不逃逸：记录替换 + 删除指令
+      - 结果 reg 逃逸：只记录替换，不删（避免 phi/跨块 use 悬空）
+    - key 没见过 → 记录表达式结果
+  3.最后统一删冗余指令
+*/
+
 namespace ME
 {
     class CSEPass : public FunctionPass
