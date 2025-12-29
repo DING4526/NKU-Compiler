@@ -10,6 +10,7 @@
 #include <middleend/pass/unify_return.h>
 #include <middleend/pass/mem2reg.h>
 #include <middleend/pass/licm.h>
+#include <middleend/pass/cse.h>
 #include <middleend/pass/adce.h>
 
 #include <backend/mir/m_module.h>
@@ -328,11 +329,13 @@ int main(int argc, char** argv)
             // 下面这个 pass 可以作为参考，主要是示范如何通过cache获取分析pass的结果
             ME::UnifyReturnPass unifyReturnPass;
             ME::Mem2RegPass mem2regpass;
-            ME::ScalarLICMPass scalarLicmPass;
+            ME::CSEPass csepass;
             ME::ADCEPass adcepass;
+            ME::ScalarLICMPass licmpass;
             unifyReturnPass.runOnModule(m);
+            csepass.runOnModule(m);
             mem2regpass.runOnModule(m);
-            // scalarLicmPass.runOnModule(m);
+            licmpass.runOnModule(m);
             adcepass.runOnModule(m);
         }
 

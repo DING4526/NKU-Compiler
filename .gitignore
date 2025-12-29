@@ -22,3 +22,7 @@ yacc.tab.h
 test.o
 test.out
 test.parser
+test.debug.glb
+test.debug.var
+
+_current_code/
