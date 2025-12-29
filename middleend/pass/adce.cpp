@@ -162,11 +162,7 @@ namespace ME
                     break;
             }
         }
-
-        // Note: for ADCE we avoid simplifying general conditional branches via reachability
-        // in cyclic CFGs (it breaks semantics inside live loops). We only fold dead-loop exits
-        // using SCC information.
-    }  // namespace
+    }
 
     void ADCEPass::runOnFunction(Function& function)
     {
@@ -402,107 +398,6 @@ namespace ME
                     else
                     {
                         ++it;
-                    }
-                }
-            }
-
-            // Prune unreachable blocks (starting from entry block 0 if present, else smallest block id)
-            if (!function.blocks.empty())
-            {
-                size_t entryId = 0;
-                if (!function.blocks.count(entryId)) entryId = function.blocks.begin()->first;
-
-                std::unordered_set<size_t> reachable;
-                std::deque<size_t>         q;
-                reachable.insert(entryId);
-                q.push_back(entryId);
-
-                while (!q.empty())
-                {
-                    size_t bid = q.front();
-                    q.pop_front();
-                    Block* b = function.getBlock(bid);
-                    if (!b || b->insts.empty()) continue;
-                    Instruction* term = b->insts.back();
-                    if (!term || !term->isTerminator()) continue;
-
-                    auto pushLabel = [&](Operand* op) {
-                        if (!op || op->getType() != OperandType::LABEL) return;
-                        size_t nid = static_cast<LabelOperand*>(op)->lnum;
-                        if (function.blocks.count(nid) && reachable.insert(nid).second) q.push_back(nid);
-                    };
-
-                    if (term->opcode == Operator::BR_COND)
-                    {
-                        auto* br = static_cast<BrCondInst*>(term);
-                        pushLabel(br->trueTar);
-                        pushLabel(br->falseTar);
-                    }
-                    else if (term->opcode == Operator::BR_UNCOND)
-                    {
-                        auto* br = static_cast<BrUncondInst*>(term);
-                        pushLabel(br->target);
-                    }
-                }
-
-                // Remove unreachable blocks from function
-                for (auto it = function.blocks.begin(); it != function.blocks.end();)
-                {
-                    if (reachable.count(it->first) == 0)
-                    {
-                        delete it->second;
-                        it = function.blocks.erase(it);
-                        changed = true;
-                    }
-                    else
-                    {
-                        ++it;
-                    }
-                }
-
-                // Clean PHI incomings referencing removed blocks
-                for (auto& [_, block] : function.blocks)
-                {
-                    for (auto itInst = block->insts.begin(); itInst != block->insts.end();)
-                    {
-                        Instruction* inst = *itInst;
-                        if (!inst || inst->opcode != Operator::PHI)
-                        {
-                            ++itInst;
-                            continue;
-                        }
-
-                        auto* phi = static_cast<PhiInst*>(inst);
-                        for (auto itIn = phi->incomingVals.begin(); itIn != phi->incomingVals.end();)
-                        {
-                            Operand* lab = itIn->first;
-                            if (!lab || lab->getType() != OperandType::LABEL)
-                            {
-                                itIn = phi->incomingVals.erase(itIn);
-                                changed = true;
-                                continue;
-                            }
-                            size_t from = static_cast<LabelOperand*>(lab)->lnum;
-                            if (reachable.count(from) == 0)
-                            {
-                                itIn = phi->incomingVals.erase(itIn);
-                                changed = true;
-                            }
-                            else
-                            {
-                                ++itIn;
-                            }
-                        }
-
-                        if (phi->incomingVals.empty())
-                        {
-                            itInst = block->insts.erase(itInst);
-                            changed = true;
-                        }
-                        else
-                        {
-                            ++itInst;
-                        }
                     }
                 }
             }
