@@ -8,6 +8,7 @@
 #include <middleend/visitor/printer/module_printer.h>
 #include <middleend/module/ir_module.h>
 #include <middleend/pass/unify_return.h>
+#include <middleend/pass/tco.h>
 #include <middleend/pass/mem2reg.h>
 #include <middleend/pass/licm.h>
 #include <middleend/pass/cse.h>
@@ -327,11 +328,16 @@ int main(int argc, char** argv)
              * - 难度不低于上述 pass 的其它优化
              */
             // 下面这个 pass 可以作为参考，主要是示范如何通过cache获取分析pass的结果
+            ME::TCOPass tcoPass;
             ME::UnifyReturnPass unifyReturnPass;
             ME::Mem2RegPass mem2regpass;
             ME::CSEPass csepass;
             ME::ADCEPass adcepass;
             ME::ScalarLICMPass licmpass;
+
+            // Tail recursion elimination should run before UnifyReturn to keep
+            // the strict "call; ret" pattern intact.
+            tcoPass.runOnModule(m);
             unifyReturnPass.runOnModule(m);
             mem2regpass.runOnModule(m);
             csepass.runOnModule(m);
