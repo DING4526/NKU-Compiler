@@ -92,15 +92,15 @@ namespace BE::RV64::Passes::Lowering
             }
         }
 
+        // 始终保存帧指针（x8）以符合 ABI，并为 set_fp 提供原值恢复
+        usedCallee.insert(static_cast<int>(BE::RV64::PR::Reg::x8));
+
         // 为需要保存的寄存器分配栈槽（在计算偏移前）
         std::map<int, int> calleeSpillFI;
-        if (!usedCallee.empty())
+        for (int id : usedCallee)
         {
-            for (int id : usedCallee)
-            {
-                // 均按 8 字节对齐保存，简化实现
-                calleeSpillFI[id] = func->frameInfo.createSpillSlot(8, 8);
-            }
+            // 均按 8 字节对齐保存，简化实现
+            calleeSpillFI[id] = func->frameInfo.createSpillSlot(8, 8);
         }
 
         // Assign concrete offsets (bytes from SP after prologue) for all objects.
@@ -113,8 +113,8 @@ namespace BE::RV64::Passes::Lowering
         else if (!func->blocks.empty())
             entry = func->blocks.begin()->second;
 
-        // 在序言后插入被调用者保存寄存器的保存指令
-        if (entry && !calleeSpillFI.empty())
+        // 在序言后插入被调用者保存寄存器的保存指令，并建立帧指针
+        if (entry)
         {
             auto it = entry->insts.begin();
             // 定位 prologue_sp
@@ -128,27 +128,28 @@ namespace BE::RV64::Passes::Lowering
                 }
             }
             // 跳过已有的保存（如 ra）
-            while (it != entry->insts.end())
+            while (it != entry->insts.end() && dynamic_cast<BE::FIStoreInst*>(*it)) ++it;
+
+            // 设置帧指针
+            it = entry->insts.insert(it, BE::RV64::createIInst_impl(
+                                            BE::RV64::Operator::ADDI, BE::RV64::PR::fp, BE::RV64::PR::sp, 0, "set_fp"));
+            ++it;
+
+            // 其余被调用者保存寄存器（除 fp）
+            if (!calleeSpillFI.empty())
             {
-                if (dynamic_cast<BE::FIStoreInst*>(*it))
+                std::vector<int> ordered;
+                ordered.reserve(calleeSpillFI.size());
+                for (auto& [id, _] : calleeSpillFI) ordered.push_back(id);
+                std::sort(ordered.begin(), ordered.end());
+
+                for (int id : ordered)
                 {
+                    auto* store = new BE::FIStoreInst(BE::RV64::PR::getPR(static_cast<uint32_t>(id)), calleeSpillFI[id],
+                        "save_callee");
+                    it = entry->insts.insert(it, store);
                     ++it;
-                    continue;
                 }
-                break;
-            }
-
-            std::vector<int> ordered;
-            ordered.reserve(calleeSpillFI.size());
-            for (auto& [id, _] : calleeSpillFI) ordered.push_back(id);
-            std::sort(ordered.begin(), ordered.end());
-
-            for (int id : ordered)
-            {
-                auto* store = new BE::FIStoreInst(BE::RV64::PR::getPR(static_cast<uint32_t>(id)), calleeSpillFI[id],
-                    "save_callee");
-                it = entry->insts.insert(it, store);
-                ++it;
             }
         }
 

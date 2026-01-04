@@ -30,7 +30,7 @@ namespace BE::Targeting::RV64
 
             // Reserve fixed registers: zero/sp/gp/tp/ra.
             // Keeping ra reserved avoids allocating vregs to ra (call/ret semantics).
-            reserved_ = {0, 1, 2, 3, 4};
+            reserved_ = {0, 1, 2, 3, 4, 8};  // also reserve fp (x8) as dedicated frame pointer
 
             // All integer regs (x0-x31)
             intRegs_.clear();
