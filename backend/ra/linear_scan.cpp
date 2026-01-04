@@ -12,7 +12,6 @@
 
 #include <map>
 #include <set>
-#include <unordered_map>
 #include <deque>
 #include <algorithm>
 
@@ -57,22 +56,89 @@ namespace BE::RA
                 if (s >= e) return;
                 segs.emplace_back(s, e);
             }
-            void merge() { TODO("考虑如何合并区间"); }
+
+            int start() const
+            {
+                if (segs.empty()) return 0;
+                int s = segs.front().start;
+                for (auto& seg : segs) s = std::min(s, seg.start);
+                return s;
+            }
+            int end() const
+            {
+                if (segs.empty()) return 0;
+                int e = segs.front().end;
+                for (auto& seg : segs) e = std::max(e, seg.end);
+                return e;
+            }
+
+            void merge()
+            {
+                if (segs.empty()) return;
+
+                std::sort(segs.begin(), segs.end(), [](const Segment& a, const Segment& b) {
+                    if (a.start != b.start) return a.start < b.start;
+                    return a.end < b.end;
+                });
+
+                std::vector<Segment> merged;
+                merged.reserve(segs.size());
+                Segment cur = segs.front();
+                for (size_t i = 1; i < segs.size(); ++i)
+                {
+                    const auto& s = segs[i];
+                    if (s.start <= cur.end)  // overlap / adjacent
+                        cur.end = std::max(cur.end, s.end);
+                    else
+                    {
+                        merged.push_back(cur);
+                        cur = s;
+                    }
+                }
+                merged.push_back(cur);
+                segs.swap(merged);
+            }
         };
 
         struct IntervalOrder
         {
-            bool operator()(const Interval* a, const Interval* b) const { TODO("实现 IntervalOrder 的比较"); }
+            bool operator()(const Interval* a, const Interval* b) const
+            {
+                if (a == b) return false;
+                if (!a) return true;
+                if (!b) return false;
+                int as = a->start();
+                int bs = b->start();
+                if (as != bs) return as < bs;
+                int ae = a->end();
+                int be = b->end();
+                if (ae != be) return ae < be;
+                return a->vreg.rId < b->vreg.rId;
+            }
         };
     }  // namespace
 
     static std::vector<int> buildAllocatableInt(const BE::Targeting::TargetRegInfo& ri)
     {
-        TODO("收集可分配的 GPR 集合");
+        std::set<int> reserved(ri.reservedRegs().begin(), ri.reservedRegs().end());
+        std::vector<int> out;
+        for (int r : ri.intRegs())
+        {
+            if (reserved.count(r)) continue;
+            out.push_back(r);
+        }
+        return out;
     }
     static std::vector<int> buildAllocatableFloat(const BE::Targeting::TargetRegInfo& ri)
     {
-        TODO("收集可分配的 FPR 集合");
+        std::set<int> reserved(ri.reservedRegs().begin(), ri.reservedRegs().end());
+        std::vector<int> out;
+        for (int r : ri.floatRegs())
+        {
+            if (reserved.count(r)) continue;
+            out.push_back(r);
+        }
+        return out;
     }
 
     void LinearScanRA::allocateFunction(BE::Function& func, const BE::Targeting::TargetRegInfo& regInfo)
@@ -104,9 +170,15 @@ namespace BE::RA
                 BE::Targeting::g_adapter->enumUses(*it, uses);
                 BE::Targeting::g_adapter->enumDefs(*it, defs);
                 for (auto& d : defs)
+                {
+                    if (!d.isVreg) continue;
                     if (!def.count(d)) def.insert(d);
+                }
                 for (auto& u : uses)
+                {
+                    if (!u.isVreg) continue;
                     if (!def.count(u)) use.insert(u);
+                }
             }
             USE[block] = std::move(use);
             DEF[block] = std::move(def);
@@ -119,7 +191,19 @@ namespace BE::RA
         // 如何做：可直接用 MIR::CFGBuilder 生成 CFG，再转换为 succs 映射。
         BE::MIR::CFG*                                 cfg = nullptr;
         std::map<BE::Block*, std::vector<BE::Block*>> succs;
-        TODO("RA: 构建 CFG 并获取后继关系");
+        {
+            BE::MIR::CFGBuilder builder(BE::Targeting::g_adapter);
+            cfg = builder.buildCFGForFunction(&func);
+
+            for (auto& [bid, block] : func.blocks)
+            {
+                if (!block) continue;
+                if (cfg && bid < cfg->graph.size())
+                    succs[block] = cfg->graph[bid];
+                else
+                    succs[block] = {};
+            }
+        }
 
         // ============================================================================
         // 活跃性分析（IN/OUT）
@@ -159,7 +243,92 @@ namespace BE::RA
         // ============================================================================
         // 作用：得到每个 vreg 的若干 [start,end) 段并合并（interval.merge()）。
         // 如何做：对每个基本块，反向遍历其指令序列，根据 IN/OUT/uses/defs 更新段的开始/结束。
-        TODO("RA: 构建活跃区间");
+        std::map<BE::Register, Interval> intervals;
+        auto ensureInterval = [&](const BE::Register& r) -> Interval& {
+            auto it = intervals.find(r);
+            if (it != intervals.end()) return it->second;
+            Interval iv;
+            iv.vreg = r;
+            auto [newIt, _] = intervals.emplace(r, iv);
+            return newIt->second;
+        };
+
+        for (auto& [bid, block] : func.blocks)
+        {
+            if (!block) continue;
+            auto rangeIt = blockRange.find(block);
+            if (rangeIt == blockRange.end()) continue;
+            int bStart = rangeIt->second.first;
+            int bEnd   = rangeIt->second.second;
+            if (bStart >= bEnd) continue;
+
+            std::set<BE::Register> live = OUT[block];
+            std::map<BE::Register, size_t> segIndexInBlock;
+
+            for (auto& r : live)
+            {
+                auto& iv = ensureInterval(r);
+                iv.addSegment(bStart, bEnd);
+                segIndexInBlock[r] = iv.segs.size() - 1;
+            }
+
+            int pos = bEnd - 1;
+            for (auto it = block->insts.rbegin(); it != block->insts.rend(); ++it, --pos)
+            {
+                std::vector<BE::Register> uses, defs;
+                BE::Targeting::g_adapter->enumUses(*it, uses);
+                BE::Targeting::g_adapter->enumDefs(*it, defs);
+
+                for (auto& u : uses)
+                {
+                    if (!u.isVreg) continue;
+                    if (!live.count(u))
+                    {
+                        live.insert(u);
+                        auto& iv = ensureInterval(u);
+                        iv.addSegment(bStart, pos + 1);
+                        segIndexInBlock[u] = iv.segs.size() - 1;
+                    }
+                }
+
+                for (auto& d : defs)
+                {
+                    if (!d.isVreg) continue;
+                    auto& iv = ensureInterval(d);
+
+                    if (live.count(d))
+                    {
+                        auto idxIt = segIndexInBlock.find(d);
+                        if (idxIt != segIndexInBlock.end())
+                        {
+                            iv.segs[idxIt->second].start = std::min(iv.segs[idxIt->second].start, pos);
+                        }
+                        live.erase(d);
+                        segIndexInBlock.erase(d);
+                    }
+                    else
+                    {
+                        // dead def
+                        iv.addSegment(pos, pos + 1);
+                    }
+                }
+            }
+        }
+
+        for (auto& [r, iv] : intervals) iv.merge();
+
+        for (auto& [r, iv] : intervals)
+        {
+            for (auto& seg : iv.segs)
+            {
+                auto it = callPoints.lower_bound(seg.start);
+                if (it != callPoints.end() && *it < seg.end)
+                {
+                    iv.crossesCall = true;
+                    break;
+                }
+            }
+        }
 
         // ============================================================================
         // 线性扫描主循环
@@ -168,7 +337,131 @@ namespace BE::RA
         // 然后尝试分配空闲物理寄存器；若无可用，执行溢出策略（如“溢出结束点更远”的区间）。
         auto allIntRegs   = buildAllocatableInt(regInfo);
         auto allFloatRegs = buildAllocatableFloat(regInfo);
-        TODO("RA: 实现 active 维护、空闲物理寄存器选择/冲突检测、溢出策略与记录（assignedPhys / spillFrameIndex）");
+
+        std::map<BE::Register, int> assignedPhys;       // vreg -> physRegId, -1 means spilled
+        std::map<BE::Register, int> spillFrameIndex;    // vreg -> FI
+
+        auto ensureSpillSlot = [&](const BE::Register& vreg) -> int {
+            auto it = spillFrameIndex.find(vreg);
+            if (it != spillFrameIndex.end()) return it->second;
+            int sizeBytes = vreg.dt ? vreg.dt->getDataWidth() : 8;
+            int fi        = func.frameInfo.createSpillSlot(sizeBytes, 8);
+            spillFrameIndex[vreg] = fi;
+            return fi;
+        };
+
+        auto allocateOneClass = [&](std::vector<Interval*>& work, const std::vector<int>& allRegs,
+                                    const std::vector<int>& calleeSaved) {
+            std::sort(work.begin(), work.end(), IntervalOrder{});
+
+            std::vector<Interval*> active;
+
+            auto intervalEnd = [](const Interval* iv) { return iv ? iv->end() : 0; };
+
+            auto expireOld = [&](int curStart) {
+                std::vector<Interval*> kept;
+                kept.reserve(active.size());
+                for (auto* iv : active)
+                {
+                    if (!iv) continue;
+                    if (iv->end() <= curStart) continue;
+                    kept.push_back(iv);
+                }
+                active.swap(kept);
+                std::sort(active.begin(), active.end(), [&](const Interval* a, const Interval* b) {
+                    return intervalEnd(a) < intervalEnd(b);
+                });
+            };
+
+            auto pickFreeReg = [&](const Interval* iv, const std::set<int>& freeSet) -> int {
+                if (!iv) return -1;
+                if (freeSet.empty()) return -1;
+
+                auto tryPickFrom = [&](const std::vector<int>& order) -> int {
+                    for (int r : order)
+                        if (freeSet.count(r)) return r;
+                    return -1;
+                };
+
+                if (iv->crossesCall)
+                {
+                    int r = tryPickFrom(calleeSaved);
+                    if (r >= 0) return r;
+                }
+                return tryPickFrom(allRegs);
+            };
+
+            for (auto* cur : work)
+            {
+                if (!cur) continue;
+                int curStart = cur->start();
+                int curEnd   = cur->end();
+
+                expireOld(curStart);
+
+                std::set<int> freeSet(allRegs.begin(), allRegs.end());
+                for (auto* iv : active)
+                {
+                    auto it = assignedPhys.find(iv->vreg);
+                    if (it != assignedPhys.end() && it->second >= 0) freeSet.erase(it->second);
+                }
+
+                int reg = pickFreeReg(cur, freeSet);
+                if (reg >= 0)
+                {
+                    assignedPhys[cur->vreg] = reg;
+                    active.push_back(cur);
+                    std::sort(active.begin(), active.end(), [&](const Interval* a, const Interval* b) {
+                        return intervalEnd(a) < intervalEnd(b);
+                    });
+                    continue;
+                }
+
+                // spill
+                if (active.empty())
+                {
+                    ensureSpillSlot(cur->vreg);
+                    assignedPhys[cur->vreg] = -1;
+                    continue;
+                }
+
+                Interval* spill = active.back();
+                int       spillEnd = spill->end();
+                if (spillEnd > curEnd)
+                {
+                    int spilledReg = assignedPhys[spill->vreg];
+                    ensureSpillSlot(spill->vreg);
+                    assignedPhys[spill->vreg] = -1;
+
+                    assignedPhys[cur->vreg] = spilledReg;
+                    active.pop_back();
+                    active.push_back(cur);
+                    std::sort(active.begin(), active.end(), [&](const Interval* a, const Interval* b) {
+                        return intervalEnd(a) < intervalEnd(b);
+                    });
+                }
+                else
+                {
+                    ensureSpillSlot(cur->vreg);
+                    assignedPhys[cur->vreg] = -1;
+                }
+            }
+        };
+
+        std::vector<Interval*> intWork;
+        std::vector<Interval*> floatWork;
+        for (auto& [r, iv] : intervals)
+        {
+            if (!r.isVreg) continue;
+            if (!r.dt) continue;
+            if (r.dt->dt == BE::DataType::Type::FLOAT)
+                floatWork.push_back(&iv);
+            else
+                intWork.push_back(&iv);
+        }
+
+        allocateOneClass(intWork, allIntRegs, regInfo.calleeSavedIntRegs());
+        allocateOneClass(floatWork, allFloatRegs, regInfo.calleeSavedFloatRegs());
 
         // ============================================================================
         // 重写 MIR（插入 reload/spill，替换 use/def）
@@ -179,6 +472,102 @@ namespace BE::RA
         //   否则在指令前插入 reload 到一个 scratch，然后用 scratch 替换 use。
         // - 对每条指令枚举 defs：若分配了物理寄存器则直接替换；
         //   否则先将 def 写到一个 scratch，再在指令后插入 spill 到对应 FI。
-        TODO("RA: 调用 Adapter 的接口改写指令");
+        auto pickScratch = [&](const std::vector<int>& allRegs, const BE::Register& like,
+                               const std::set<int>& used) -> BE::Register {
+            for (int rid : allRegs)
+            {
+                if (used.count(rid)) continue;
+                return BE::Register(rid, like.dt, false);
+            }
+            ERROR("No scratch physical register available");
+            return BE::Register();
+        };
+
+        for (auto& [bid, block] : func.blocks)
+        {
+            if (!block) continue;
+            for (size_t idx = 0; idx < block->insts.size(); ++idx)
+            {
+                auto it = block->insts.begin() + static_cast<std::ptrdiff_t>(idx);
+                auto* inst = *it;
+                if (!inst) continue;
+
+                std::set<int> usedPhys;
+                {
+                    std::vector<BE::Register> phys;
+                    BE::Targeting::g_adapter->enumPhysRegs(inst, phys);
+                    for (auto& r : phys) usedPhys.insert(static_cast<int>(r.rId));
+                }
+
+                // uses
+                {
+                    std::vector<BE::Register> uses;
+                    BE::Targeting::g_adapter->enumUses(inst, uses);
+
+                    for (auto& u : uses)
+                    {
+                        if (!u.isVreg) continue;
+
+                        auto itA = assignedPhys.find(u);
+                        int  physId = (itA != assignedPhys.end()) ? itA->second : -1;
+
+                        if (physId >= 0)
+                        {
+                            BE::Register physReg(physId, u.dt, false);
+                            BE::Targeting::g_adapter->replaceUse(inst, u, physReg);
+                            usedPhys.insert(physId);
+                        }
+                        else
+                        {
+                            int fi = ensureSpillSlot(u);
+                            const auto& pool = (u.dt && u.dt->dt == BE::DataType::Type::FLOAT) ? allFloatRegs : allIntRegs;
+                            BE::Register scratch = pickScratch(pool, u, usedPhys);
+
+                            // 插在当前指令之前：会导致当前指令 index 后移
+                            it = block->insts.begin() + static_cast<std::ptrdiff_t>(idx);
+                            BE::Targeting::g_adapter->insertReloadBefore(block, it, scratch, fi);
+                            idx++;
+                            it = block->insts.begin() + static_cast<std::ptrdiff_t>(idx);
+                            inst = *it;
+
+                            BE::Targeting::g_adapter->replaceUse(inst, u, scratch);
+                            usedPhys.insert(static_cast<int>(scratch.rId));
+                        }
+                    }
+                }
+
+                // defs
+                {
+                    std::vector<BE::Register> defs;
+                    BE::Targeting::g_adapter->enumDefs(inst, defs);
+                    for (auto& d : defs)
+                    {
+                        if (!d.isVreg) continue;
+
+                        auto itA = assignedPhys.find(d);
+                        int  physId = (itA != assignedPhys.end()) ? itA->second : -1;
+
+                        if (physId >= 0)
+                        {
+                            BE::Register physReg(physId, d.dt, false);
+                            BE::Targeting::g_adapter->replaceDef(inst, d, physReg);
+                            usedPhys.insert(physId);
+                        }
+                        else
+                        {
+                            int fi = ensureSpillSlot(d);
+                            const auto& pool = (d.dt && d.dt->dt == BE::DataType::Type::FLOAT) ? allFloatRegs : allIntRegs;
+                            BE::Register scratch = pickScratch(pool, d, usedPhys);
+                            BE::Targeting::g_adapter->replaceDef(inst, d, scratch);
+                            usedPhys.insert(static_cast<int>(scratch.rId));
+
+                            it = block->insts.begin() + static_cast<std::ptrdiff_t>(idx);
+                            inst = *it;
+                            BE::Targeting::g_adapter->insertSpillAfter(block, it, scratch, fi);
+                        }
+                    }
+                }
+            }
+        }
     }
 }  // namespace BE::RA
