@@ -15,6 +15,9 @@ import subprocess
 from contextlib import ExitStack
 
 
+SYSY_COMPILER = "bin/compiler"
+
+
 def run(cmd, **kwargs):
     """小工具：跑命令并在失败时抛异常，方便定位问题。"""
     print("[RUN]", " ".join(cmd))
@@ -51,6 +54,8 @@ def main():
     parser.add_argument("--stdin", help="标准输入文件（可选）")
     parser.add_argument("--std-out", help="标准输出文件，用于 diff（可选）")
     parser.add_argument("--prefix", help="生成文件前缀，默认用 sy 文件名去掉后缀")
+    parser.add_argument("--stage", choices=["llvm", "riscv"], default="llvm",
+                        help="测试阶段：llvm 或 riscv，默认 llvm")
     args = parser.parse_args()
 
     sy_path = args.sy_file
@@ -58,38 +63,75 @@ def main():
         raise FileNotFoundError(f"SysY file not found: {sy_path}")
 
     base = args.prefix or os.path.splitext(os.path.basename(sy_path))[0]
-    ll_file = f"{base}.ll"
-    obj_file = f"{base}.o"
-    exe_file = f"{base}.bin"
-    out_file = f"{base}.out"
-
+    base_dir = os.path.dirname(base)
+    if base_dir.strip():
+        os.makedirs(base_dir, exist_ok=True)
     opt_flag = f"-O{args.opt}"
 
-    # 1. SysY -> LLVM IR
-    run(["bin/compiler", "-llvm", sy_path, "-o", ll_file, opt_flag])
+    if args.stage == "llvm":
+        ll_file = f"{base}.ll"
+        obj_file = f"{base}.o"
+        exe_file = f"{base}.bin"
+        out_file = f"{base}.out"
 
-    # 2. 检查 IR 语法
-    run(["llvm-as", ll_file, "-o", "/dev/null"])
+        # 1. SysY -> LLVM IR
+        run([SYSY_COMPILER, "-llvm", sy_path, "-o", ll_file, opt_flag])
 
-    # 3. LLVM IR -> object
-    run(["clang", ll_file, "-c", "-o", obj_file, "-w"])
+        # 2. 检查 IR 语法
+        run(["llvm-as", ll_file, "-o", "/dev/null"])
 
-    # 4. 链接成可执行文件（这里不加 -static，尽量避免环境问题）
-    run(["clang", obj_file, "-o", exe_file, "-L./lib", "-lsysy_x86"])
+        # 3. LLVM IR -> object
+        run(["clang", ll_file, "-c", "-o", obj_file, "-w"])
 
-    # 5. 运行程序，收集输出
-    print("[INFO] Running executable ...")
-    with ExitStack() as stack:
-        stdin_f = stack.enter_context(open(args.stdin, "r", encoding="utf-8")) if args.stdin else None
-        stdout_f = stack.enter_context(open(out_file, "w", encoding="utf-8"))
+        # 4. 链接成可执行文件（这里不加 -static，尽量避免环境问题）
+        run(["clang", obj_file, "-o", exe_file, "-L./lib", "-lsysy_x86"])
 
-        res = subprocess.run(
-            [f"./{exe_file}"],
-            stdin=stdin_f,
-            stdout=stdout_f,
-            stderr=subprocess.DEVNULL,
-            text=False,
-        )
+        # 5. 运行程序，收集输出
+        print("[INFO] Running executable ...")
+        with ExitStack() as stack:
+            stdin_f = stack.enter_context(open(args.stdin, "r", encoding="utf-8")) if args.stdin else None
+            stdout_f = stack.enter_context(open(out_file, "w", encoding="utf-8"))
+
+            res = subprocess.run(
+                [f"./{exe_file}"],
+                stdin=stdin_f,
+                stdout=stdout_f,
+                stderr=subprocess.DEVNULL,
+                text=False,
+            )
+    else:
+        # RISC-V 单测：保留生成的 .s 便于定位
+        asm_file = f"{base}.s"
+        obj_file = f"{base}.o"
+        exe_file = f"{base}.bin"
+        out_file = f"{base}.out"
+
+        # 1. SysY -> RISC-V asm
+        run([SYSY_COMPILER, sy_path, "-S", "-o", asm_file, opt_flag])
+
+        # 2. asm -> obj
+        run(["riscv64-linux-gnu-gcc", asm_file, "-c", "-o", obj_file, "-w"])
+
+        # 3. 链接
+        link_cmd = [
+            "riscv64-linux-gnu-gcc", obj_file, "-o", exe_file,
+            "-L./lib", "-lsysy_riscv", "-static", "-mcmodel=medany", "-Wl,--no-relax"
+        ]
+        run(link_cmd)
+
+        # 4. 运行（qemu）
+        print("[INFO] Running executable with qemu-riscv64 ...")
+        with ExitStack() as stack:
+            stdin_f = stack.enter_context(open(args.stdin, "r", encoding="utf-8")) if args.stdin else None
+            stdout_f = stack.enter_context(open(out_file, "w", encoding="utf-8"))
+
+            res = subprocess.run(
+                ["qemu-riscv64", f"./{exe_file}"],
+                stdin=stdin_f,
+                stdout=stdout_f,
+                stderr=subprocess.DEVNULL,
+                text=False,
+            )
 
     # 退出码追加到输出文件尾
     append_return_code(out_file, res.returncode)

@@ -387,6 +387,8 @@ namespace BE::RA
                 {
                     int r = tryPickFrom(calleeSaved);
                     if (r >= 0) return r;
+                    // For intervals crossing calls, spill rather than use caller-saved regs to avoid call-site clobbering
+                    return -1;
                 }
                 return tryPickFrom(allRegs);
             };
