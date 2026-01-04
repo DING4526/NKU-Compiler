@@ -122,8 +122,9 @@ namespace BE
             if (val.getNode() && val.getNode()->hasIRRegId() && val.getNode()->getIRRegId() != regId)
             {
                 // 创建 COPY 节点：COPY 接收源值，输出到当前寄存器
+                // 使用 getUniqueNode 避免 COPY 节点被 CSE 合并，确保每个 IR 寄存器有独立的定义点
                 BE::DataType* vt = val.getNode()->getNumValues() > 0 ? val.getNode()->getValueType(0) : BE::I32;
-                SDValue copyNode = dag.getNode(static_cast<unsigned>(ISD::COPY), {vt}, {val});
+                SDValue copyNode = dag.getUniqueNode(static_cast<unsigned>(ISD::COPY), {vt}, {val});
                 copyNode.getNode()->setIRRegId(regId);
                 reg_value_map_[regId] = copyNode;
                 return;

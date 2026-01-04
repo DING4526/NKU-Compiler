@@ -49,6 +49,15 @@ namespace BE
                 return SDValue(n, 0);
             }
 
+            // 创建节点但不做 CSE（用于 COPY 等需要独立实例的节点）
+            SDValue getUniqueNode(uint32_t opcode, const std::vector<DataType*>& vts, const std::vector<SDValue>& ops)
+            {
+                auto* n = new SDNode(opcode, vts, ops);
+                nodes_.push_back(n);
+                n->setId(next_id_++);
+                return SDValue(n, 0);
+            }
+
             SDValue getSymNode(uint32_t opcode, const std::vector<DataType*>& vts, const std::vector<SDValue>& ops,
                 const std::string& symbol)
             {
