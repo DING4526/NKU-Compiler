@@ -5,6 +5,7 @@
 #include <backend/targets/riscv64/passes/lowering/frame_lowering.h>
 #include <backend/targets/riscv64/passes/lowering/stack_lowering.h>
 #include <backend/targets/riscv64/passes/lowering/phi_elimination.h>
+#include <backend/targets/riscv64/passes/lowering/move_lowering.h>
 #include <backend/targets/riscv64/rv64_codegen.h>
 
 #include <backend/common/cfg_builder.h>
@@ -16,8 +17,6 @@
 
 #include <debug.h>
 
-#include <map>
-#include <vector>
 namespace BE
 {
     namespace RA
@@ -46,19 +45,24 @@ namespace BE::Targeting::RV64
         static void runPreRAPasses(BE::Module& m, const BE::Targeting::TargetInstrAdapter* adapter)
         {
             BE::RV64::Passes::Lowering::FrameLoweringPass frameLowering;
+            BE::RV64::Passes::Lowering::PhiEliminationPass phiElim;
+            BE::RV64::Passes::Lowering::MoveLoweringPass moveLowering;
             frameLowering.runOnModule(m);
 
             // 对实现了 mem2reg 优化的同学，还需完成 Phi Elimination
             // BE::RV64::Passes::Lowering::PhiEliminationPass phiElim;
-            // phiElim.runOnModule(m, adapter);
+            phiElim.runOnModule(m, adapter);
 
-            TODO("如有需要，需在寄存器分配前完成其它伪指令的消解，如移动指令的消解");
+            // 消解 MOVE（包含 float immediate），避免输出伪指令到汇编
+            moveLowering.runOnModule(m);
+
+            // TODO("如有需要，需在寄存器分配前完成其它伪指令的消解");
         }
         static void runRAPipeline(BE::Module& m, const BE::Targeting::RV64::RegInfo& regInfo)
         {
-            TODO("使用你实现的寄存器分配器进行寄存器分配");
-            // BE::RA::LinearScanRA ls;
-            // ls.allocate(m, regInfo);
+            // TODO("使用你实现的寄存器分配器进行寄存器分配");
+            BE::RA::LinearScanRA ls;
+            ls.allocate(m, regInfo);
         }
         static void runPostRAPasses(BE::Module& m)
         {
@@ -73,10 +77,10 @@ namespace BE::Targeting::RV64
         static BE::Targeting::RV64::RegInfo      s_regInfo;
         BE::Targeting::setTargetInstrAdapter(&s_adapter);
 
-        TODO("选择一种 Instruction Selector 实现，并完成指令选择");
-        // BE::RV64::DAGIsel isel(ir, backend, this);
+        // TODO("选择一种 Instruction Selector 实现，并完成指令选择");
+        BE::RV64::DAGIsel isel(ir, backend, this);
         // BE::RV64::IRIsel isel(ir, backend, this);
-        // isel.run();
+        isel.run();
 
         runPreRAPasses(*backend, &s_adapter);
         runRAPipeline(*backend, s_regInfo);
