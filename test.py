@@ -29,7 +29,7 @@ TEST_OUTPUT_DIR = "test_output"
 TOOLCHAINS_CONF = "toolchains.conf"
 
 IR_TIMEOUT = "10"
-ASM_TIMEOUT = "15"
+ASM_TIMEOUT = "8"
 
 MAX_FILENAME_LEN = 0
 

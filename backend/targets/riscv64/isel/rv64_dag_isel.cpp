@@ -417,20 +417,16 @@ namespace BE::RV64
     void DAGIsel::selectPhi(const DAG::SDNode* node, BE::Block* m_block)
     {
         // ============================================================================
-        // TODO: 选择 PHI 节点
+        // 选择 PHI 节点
         // ============================================================================
         //
         // 作用：
         // 为 PHI 节点生成 MIR 的 PhiInst，记录所有前驱块与对应的值。
         //
-        // 为什么需要：
-        // - PHI 节点在 SSA 中合并来自不同前驱的值
-        // - 需要保留前驱块信息，供后续 PHI 消解 Pass 使用
-        //
         // 关键点：
-        // - 此处的常量应直接作为立即数，无需实例化为寄存器
-        // - 至于为什么，你可以思考一下 getOperandReg 的实现
-        // - getOperandReg 对于第一次使用常量的行为是什么，会将立即数加载的指令插入到什么地方？
+        // - PHI 的源值应来自前驱块，不应在当前块中生成实例化指令
+        // - 对于常量，直接作为立即数
+        // - 对于寄存器，使用已分配的虚拟寄存器映射
 
         if (!node || !m_block) return;
 
@@ -451,14 +447,37 @@ namespace BE::RV64
 
             BE::Operand* srcOp = nullptr;
             auto         vop   = static_cast<DAG::ISD>(valNode->getOpcode());
+            
             if ((vop == DAG::ISD::CONST_I32 || vop == DAG::ISD::CONST_I64) && valNode->hasImmI64())
+            {
                 srcOp = new BE::I32Operand(static_cast<int>(valNode->getImmI64()));
+            }
             else if (vop == DAG::ISD::CONST_F32 && valNode->hasImmF32())
+            {
                 srcOp = new BE::F32Operand(valNode->getImmF32());
+            }
             else
             {
-                Register srcReg = getOperandReg(valNode, m_block);
-                srcOp           = new BE::RegOperand(srcReg);
+                // 对于 PHI 的源值（非常量），直接查找已分配的寄存器
+                // 不能调用 getOperandReg，否则会在当前块生成实例化指令
+                Register srcReg;
+                auto it = nodeToVReg_.find(valNode);
+                if (it != nodeToVReg_.end())
+                {
+                    srcReg = it->second;
+                }
+                else if (vop == DAG::ISD::REG && valNode->hasIRRegId())
+                {
+                    // 通过 IR 寄存器 ID 查找
+                    srcReg = getOrCreateVReg(valNode->getIRRegId(), 
+                        valNode->getNumValues() > 0 ? valNode->getValueType(0) : BE::I64);
+                }
+                else
+                {
+                    // 回退：使用默认寄存器（这种情况不应该发生）
+                    srcReg = getOrCreateVReg(0, BE::I64);
+                }
+                srcOp = new BE::RegOperand(srcReg);
             }
 
             phi->incomingVals[labelId] = srcOp;
@@ -974,6 +993,14 @@ namespace BE::RV64
             ERROR("CALL without SYMBOL callee");
 
         std::string funcName = callee->getSymbol();
+        
+        // 处理 LLVM 内置函数，将其转换为标准库调用
+        if (funcName == "llvm.memset.p0.i32" || funcName == "llvm.memset.p0.i64")
+        {
+            // llvm.memset(ptr, val, len, isvolatile) -> memset(ptr, val, len)
+            // 参数: a0 = ptr, a1 = val (i8), a2 = len
+            funcName = "memset";
+        }
 
         int usedIntRegs   = 0;
         int usedFloatRegs = 0;
