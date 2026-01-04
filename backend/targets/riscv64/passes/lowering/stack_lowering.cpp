@@ -5,6 +5,8 @@
 #include <backend/targets/riscv64/rv64_defs.h>
 #include <algorithm>
 #include <backend/targets/riscv64/rv64_reg_info.h>
+#include <map>
+#include <set>
 
 namespace BE::RV64::Passes::Lowering
 {
@@ -64,8 +66,120 @@ namespace BE::RV64::Passes::Lowering
         if (!func) return;
         if (func->blocks.empty()) return;
 
+        // 收集函数中实际使用到的被调用者保存寄存器（在寄存器分配后运行）
+        BE::Targeting::RV64::RegInfo regInfo;
+        std::set<int>                calleeInt(regInfo.calleeSavedIntRegs().begin(), regInfo.calleeSavedIntRegs().end());
+        std::set<int>                calleeFloat(regInfo.calleeSavedFloatRegs().begin(), regInfo.calleeSavedFloatRegs().end());
+        std::set<int>                usedCallee;
+
+        for (auto& [bid, block] : func->blocks)
+        {
+            (void)bid;
+            if (!block) continue;
+            for (auto* inst : block->insts)
+            {
+                auto* ri = dynamic_cast<BE::RV64::Instr*>(inst);
+                if (!ri) continue;
+
+                auto mark = [&](const BE::Register& r) {
+                    if (r.isVreg) return;
+                    int id = r.rId;
+                    if (calleeInt.count(id) || calleeFloat.count(id)) usedCallee.insert(id);
+                };
+                mark(ri->rd);
+                mark(ri->rs1);
+                mark(ri->rs2);
+            }
+        }
+
+        // 为需要保存的寄存器分配栈槽（在计算偏移前）
+        std::map<int, int> calleeSpillFI;
+        if (!usedCallee.empty())
+        {
+            for (int id : usedCallee)
+            {
+                // 均按 8 字节对齐保存，简化实现
+                calleeSpillFI[id] = func->frameInfo.createSpillSlot(8, 8);
+            }
+        }
+
         // Assign concrete offsets (bytes from SP after prologue) for all objects.
         func->stackSize = func->frameInfo.calculateOffsets();
+
+        // 获取入口基本块（优先 label 0）
+        BE::Block* entry = nullptr;
+        if (func->blocks.count(0))
+            entry = func->blocks[0];
+        else if (!func->blocks.empty())
+            entry = func->blocks.begin()->second;
+
+        // 在序言后插入被调用者保存寄存器的保存指令
+        if (entry && !calleeSpillFI.empty())
+        {
+            auto it = entry->insts.begin();
+            // 定位 prologue_sp
+            for (; it != entry->insts.end(); ++it)
+            {
+                auto* ri = dynamic_cast<BE::RV64::Instr*>(*it);
+                if (ri && ri->comment == "prologue_sp")
+                {
+                    ++it;
+                    break;
+                }
+            }
+            // 跳过已有的保存（如 ra）
+            while (it != entry->insts.end())
+            {
+                if (dynamic_cast<BE::FIStoreInst*>(*it))
+                {
+                    ++it;
+                    continue;
+                }
+                break;
+            }
+
+            std::vector<int> ordered;
+            ordered.reserve(calleeSpillFI.size());
+            for (auto& [id, _] : calleeSpillFI) ordered.push_back(id);
+            std::sort(ordered.begin(), ordered.end());
+
+            for (int id : ordered)
+            {
+                auto* store = new BE::FIStoreInst(BE::RV64::PR::getPR(static_cast<uint32_t>(id)), calleeSpillFI[id],
+                    "save_callee");
+                it = entry->insts.insert(it, store);
+                ++it;
+            }
+        }
+
+        // 在所有返回前插入被调用者保存寄存器的恢复指令，占位为 FILoad，后续统一降解
+        if (!calleeSpillFI.empty())
+        {
+            std::vector<int> ordered;
+            ordered.reserve(calleeSpillFI.size());
+            for (auto& [id, _] : calleeSpillFI) ordered.push_back(id);
+            std::sort(ordered.begin(), ordered.end());
+
+            for (auto& [bid, block] : func->blocks)
+            {
+                (void)bid;
+                if (!block) continue;
+                for (auto it = block->insts.begin(); it != block->insts.end(); ++it)
+                {
+                    auto* ri = dynamic_cast<BE::RV64::Instr*>(*it);
+                    if (ri && ri->comment == "epilogue_sp")
+                    {
+                        for (int id : ordered)
+                        {
+                            auto* load = new BE::FILoadInst(
+                                BE::RV64::PR::getPR(static_cast<uint32_t>(id)), calleeSpillFI[id], "restore_callee");
+                            it = block->insts.insert(it, load);
+                            ++it;
+                        }
+                    }
+                }
+            }
+        }
 
         for (auto& [bid, block] : func->blocks)
         {
