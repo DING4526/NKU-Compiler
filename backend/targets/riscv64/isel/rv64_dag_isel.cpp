@@ -531,7 +531,8 @@ namespace BE::RV64
         bool     isRhsConst = false;
 
         auto rhsOp = static_cast<DAG::ISD>(rhs->getOpcode());
-        if (rhsOp == DAG::ISD::CONST_I32 && rhs->hasImmI64())
+        // 检查 CONST_I32 和 CONST_I64，因为 DAG builder 使用 getConstantI64 创建整数常量
+        if ((rhsOp == DAG::ISD::CONST_I32 || rhsOp == DAG::ISD::CONST_I64) && rhs->hasImmI64())
         {
             rhsImm     = static_cast<int>(rhs->getImmI64());
             isRhsConst = true;
