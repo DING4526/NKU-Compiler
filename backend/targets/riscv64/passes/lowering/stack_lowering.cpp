@@ -37,6 +37,28 @@ namespace BE::RV64::Passes::Lowering
         return Operator::SW;
     }
 
+    // 辅助函数：生成栈指针调整指令序列
+    // 当偏移量超过 12 位立即数范围时，使用 LI + ADD 序列
+    static std::vector<BE::MInstruction*> generateSPAdjust(int delta, const std::string& comment)
+    {
+        std::vector<BE::MInstruction*> insts;
+        if (imm12(delta))
+        {
+            auto* inst = createIInst(Operator::ADDI, PR::sp, PR::sp, delta);
+            inst->comment = comment;
+            insts.push_back(inst);
+        }
+        else
+        {
+            // 使用 t0 作为临时寄存器加载大立即数
+            insts.push_back(createUInst(Operator::LI, PR::t0, delta));
+            auto* addInst = createRInst(Operator::ADD, PR::sp, PR::sp, PR::t0);
+            addInst->comment = comment;
+            insts.push_back(addInst);
+        }
+        return insts;
+    }
+
     void StackLoweringPass::lowerFunction(BE::Function* func)
     {
         if (!func) return;
@@ -60,17 +82,32 @@ namespace BE::RV64::Passes::Lowering
                     int off = func->frameInfo.getSpillSlotOffset(ls->frameIndex);
                     ASSERT(off >= 0 && "Invalid spill slot offset");
 
-                    if (!imm12(off))
+                    Operator op = pickLoadOp(ls->dest);
+                    
+                    if (imm12(off))
                     {
-                        // Current backend doesn't reserve a dedicated scratch register post-RA.
-                        // Keep it simple: require offsets within encodable range.
-                        ERROR("Spill slot offset out of imm12 range: %d", off);
+                        auto* real = BE::RV64::createIInst(op, ls->dest, BE::RV64::PR::sp, off);
+                        BE::MInstruction::delInst(inst);
+                        *it = real;
                     }
-
-                    Operator op   = pickLoadOp(ls->dest);
-                    auto*    real = BE::RV64::createIInst(op, ls->dest, BE::RV64::PR::sp, off);
-                    BE::MInstruction::delInst(inst);
-                    *it = real;
+                    else
+                    {
+                        // 偏移超范围：使用 t0 临时寄存器计算地址
+                        // li t0, off; add t0, sp, t0; lw/ld dest, 0(t0)
+                        std::vector<BE::MInstruction*> seq;
+                        seq.push_back(createUInst(Operator::LI, PR::t0, off));
+                        seq.push_back(createRInst(Operator::ADD, PR::t0, PR::sp, PR::t0));
+                        seq.push_back(createIInst(op, ls->dest, PR::t0, 0));
+                        
+                        BE::MInstruction::delInst(inst);
+                        it = block->insts.erase(it);
+                        for (auto* ni : seq)
+                        {
+                            it = block->insts.insert(it, ni);
+                            ++it;
+                        }
+                        --it;
+                    }
                     continue;
                 }
 
@@ -79,34 +116,84 @@ namespace BE::RV64::Passes::Lowering
                     int off = func->frameInfo.getSpillSlotOffset(ss->frameIndex);
                     ASSERT(off >= 0 && "Invalid spill slot offset");
 
-                    if (!imm12(off))
+                    Operator op = pickStoreOp(ss->src);
+                    
+                    if (imm12(off))
                     {
-                        ERROR("Spill slot offset out of imm12 range: %d", off);
+                        auto* real = BE::RV64::createSInst(op, ss->src, BE::RV64::PR::sp, off);
+                        BE::MInstruction::delInst(inst);
+                        *it = real;
                     }
-
-                    Operator op   = pickStoreOp(ss->src);
-                    auto*    real = BE::RV64::createSInst(op, ss->src, BE::RV64::PR::sp, off);
-                    BE::MInstruction::delInst(inst);
-                    *it = real;
+                    else
+                    {
+                        // 偏移超范围：使用 t0 临时寄存器计算地址
+                        // li t0, off; add t0, sp, t0; sw/sd src, 0(t0)
+                        std::vector<BE::MInstruction*> seq;
+                        seq.push_back(createUInst(Operator::LI, PR::t0, off));
+                        seq.push_back(createRInst(Operator::ADD, PR::t0, PR::sp, PR::t0));
+                        seq.push_back(createSInst(op, ss->src, PR::t0, 0));
+                        
+                        BE::MInstruction::delInst(inst);
+                        it = block->insts.erase(it);
+                        for (auto* ni : seq)
+                        {
+                            it = block->insts.insert(it, ni);
+                            ++it;
+                        }
+                        --it;
+                    }
                     continue;
                 }
 
                 if (auto* ri = dynamic_cast<BE::RV64::Instr*>(inst))
                 {
                     // Patch frame prologue/epilogue stack pointer adjustments.
+                    // 当栈大小超过 12 位立即数范围时，需要替换为多条指令
                     if (ri->op == BE::RV64::Operator::ADDI && ri->rd == BE::RV64::PR::sp && ri->rs1 == BE::RV64::PR::sp)
                     {
                         if (ri->comment == "prologue_sp")
                         {
                             int delta = -func->stackSize;
-                            if (!imm12(delta)) ERROR("Stack size out of imm12 range: %d", func->stackSize);
-                            ri->imme = delta;
+                            if (imm12(delta))
+                            {
+                                ri->imme = delta;
+                            }
+                            else
+                            {
+                                // 替换为 LI + ADD 序列
+                                auto newInsts = generateSPAdjust(delta, "prologue_sp");
+                                BE::MInstruction::delInst(inst);
+                                it = block->insts.erase(it);
+                                for (auto* ni : newInsts)
+                                {
+                                    it = block->insts.insert(it, ni);
+                                    ++it;
+                                }
+                                --it;  // 回退以便下次迭代正确
+                                continue;
+                            }
                         }
                         else if (ri->comment == "epilogue_sp")
                         {
                             int delta = func->stackSize;
-                            if (!imm12(delta)) ERROR("Stack size out of imm12 range: %d", func->stackSize);
-                            ri->imme = delta;
+                            if (imm12(delta))
+                            {
+                                ri->imme = delta;
+                            }
+                            else
+                            {
+                                // 替换为 LI + ADD 序列
+                                auto newInsts = generateSPAdjust(delta, "epilogue_sp");
+                                BE::MInstruction::delInst(inst);
+                                it = block->insts.erase(it);
+                                for (auto* ni : newInsts)
+                                {
+                                    it = block->insts.insert(it, ni);
+                                    ++it;
+                                }
+                                --it;  // 回退以便下次迭代正确
+                                continue;
+                            }
                         }
                     }
 

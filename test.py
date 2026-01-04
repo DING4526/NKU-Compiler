@@ -28,8 +28,8 @@ TESTCASES_DIR = "testcase/functional"
 TEST_OUTPUT_DIR = "test_output"
 TOOLCHAINS_CONF = "toolchains.conf"
 
-IR_TIMEOUT = "30"
-ASM_TIMEOUT = "60"
+IR_TIMEOUT = "10"
+ASM_TIMEOUT = "15"
 
 MAX_FILENAME_LEN = 0
 
@@ -105,16 +105,16 @@ def add_returncode(file, ret):
     """Appends the return code to the given file."""
     need_newline = False
     try:
-        with open(file, "r", encoding="utf-8") as f:
+        with open(file, "rb") as f:
             content = f.read()
             if len(content) > 0:
-                if not content.endswith("\n"):
+                if not content.endswith(b"\n"):
                     need_newline = True
     except IOError:
         print(f"\033[91mUnknown Error on \033[0m{file}, \033[91mPlease check your output file\033[0m")
         return False
 
-    with open(file, "a+", encoding="utf-8") as f:
+    with open(file, "a+", encoding="utf-8", errors="replace") as f:
         if need_newline:
             f.write("\n")
         f.write(str(ret))
@@ -249,12 +249,18 @@ def _compile_asm_and_link_riscv(target_file: str, src_file: str, test_name: str)
 
     print_test_status(test_name, "Linking object to exec")
     # Link .o to executable
-    res = subprocess.run([
+    # 当 TEXT_ADDR 为空时，不使用 -Ttext 参数，避免 linux 工具链下的重定位溢出
+    link_cmd = [
         RISCV_GCC, "tmp.o", "-o", "tmp.bin",
         "-L./lib", "-lsysy_riscv",
-        "-static", "-mcmodel=medany",
-        f"-Wl,--no-relax,-Ttext={TEXT_ADDR}"
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        "-static", "-mcmodel=medany"
+    ]
+    if TEXT_ADDR:
+        link_cmd.append(f"-Wl,--no-relax,-Ttext={TEXT_ADDR}")
+    else:
+        link_cmd.append("-Wl,--no-relax")
+    
+    res = subprocess.run(link_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
     subprocess.run(["rm", "tmp.o"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
     if res.returncode != 0:
         print_test_status(test_name, "\033[93mLink Error\033[0m", final=True)
