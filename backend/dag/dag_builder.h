@@ -90,11 +90,15 @@ namespace BE
              * @brief 记录 IR 指令的定义结果
              * @param res IR 结果操作数（通常是一个虚拟寄存器）
              * @param val 对应的 DAG 节点
+             * @param dag 当前的 SelectionDAG（用于在 CSE 情况下创建 COPY）
              *
              * 将 IR 指令的结果（如 %3 = add %1, %2 中的 %3）
              * 映射到对应的 DAG 节点（ADD 节点），存入 reg_value_map_。
+             * 
+             * 当 CSE 导致多个 IR 寄存器映射到同一个 DAG 节点时，
+             * 为后续的 IR 寄存器创建 COPY 节点，确保每个 IR 寄存器有独立的定义。
              */
-            void setDef(ME::Operand* res, const SDValue& val);
+            void setDef(ME::Operand* res, const SDValue& val, SelectionDAG& dag);
 
             BE::DataType* mapType(ME::DataType t);
             uint32_t      mapArithmeticOpcode(ME::Operator op, bool isFloat);

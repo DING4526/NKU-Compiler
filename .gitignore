@@ -28,4 +28,6 @@ test.debug.var
 _current_code/
 result
 *.sh
+a.outtmp.bin
+tmp.bin
 a.out
