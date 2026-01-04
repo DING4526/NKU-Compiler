@@ -181,7 +181,9 @@ namespace ME
 
             std::unordered_map<size_t, int> F;
             
-            for(size_t idx = 0, X = W[0]; idx < W.size(); X = W[++idx]) {
+            // 处理W可能为空的情况
+            for(size_t idx = 0; idx < W.size(); ++idx) {
+                size_t X = W[idx];
                 if (X >= domFrontier.size()) continue;
                 for(int Y_id : domFrontier[X]) {
                     if(F.find(Y_id) == F.end()) {
@@ -190,11 +192,13 @@ namespace ME
                             W.push_back(Y_id);
                         }
                         
-                        Block* block = id2block[Y_id];
-                        Operand* newReg = getRegOperand(function.getNewRegId());
-                        auto* phi = new PhiInst(allocaInst->dt, newReg);
-                        block->insertFront(phi);
-                        phiToAlloca[phi] = allocaInst;
+                        if (id2block.count(Y_id)) {
+                            Block* block = id2block[Y_id];
+                            Operand* newReg = getRegOperand(function.getNewRegId());
+                            auto* phi = new PhiInst(allocaInst->dt, newReg);
+                            block->insertFront(phi);
+                            phiToAlloca[phi] = allocaInst;
+                        }
                     }
                 }
             }
@@ -256,10 +260,9 @@ namespace ME
                     if (!stacks[alloca].empty()) {
                         regReplacements[load->res->getRegNum()] = stacks[alloca].top();
                     } else {
-                        // If a value is read before any store reaches here, fall back to a
-                        // deterministic default to keep IR well-formed.
                         Operand* defVal = nullptr;
-                        if (alloca->dt == DataType::F32) defVal = getImmeF32Operand(0.0f);
+                        if (alloca->dt == DataType::I32) defVal = getImmeI32Operand(0);
+                        else if (alloca->dt == DataType::F32) defVal = getImmeF32Operand(0.0f);
                         else defVal = getImmeI32Operand(0);
                         regReplacements[load->res->getRegNum()] = defVal;
                     }
@@ -277,28 +280,32 @@ namespace ME
             }
         }
 
-        for (auto* succ : cfg->G[block->blockId]) {
-             for (auto* inst : succ->insts) {
-                 if (auto* phi = dynamic_cast<PhiInst*>(inst)) {
-                     if (phiToAlloca.count(phi)) {
-                         AllocaInst* alloca = phiToAlloca[phi];
-                         Operand* val = nullptr;
-                         if (!stacks[alloca].empty()) {
-                             val = stacks[alloca].top();
-                         } else {
-                             if (alloca->dt == DataType::I32) val = getImmeI32Operand(0);
-                             else if (alloca->dt == DataType::F32) val = getImmeF32Operand(0.0);
-                             else val = getImmeI32Operand(0);
+        if (block->blockId < cfg->G.size()) {
+            for (auto* succ : cfg->G[block->blockId]) {
+                 for (auto* inst : succ->insts) {
+                     if (auto* phi = dynamic_cast<PhiInst*>(inst)) {
+                         if (phiToAlloca.count(phi)) {
+                             AllocaInst* alloca = phiToAlloca[phi];
+                             Operand* val = nullptr;
+                             if (!stacks[alloca].empty()) {
+                                 val = stacks[alloca].top();
+                             } else {
+                                 if (alloca->dt == DataType::I32) val = getImmeI32Operand(0);
+                                 else if (alloca->dt == DataType::F32) val = getImmeF32Operand(0.0f);
+                                 else val = getImmeI32Operand(0);
+                             }
+                             phi->addIncoming(val, getLabelOperand(block->blockId));
                          }
-                         phi->addIncoming(val, getLabelOperand(block->blockId));
-                     }
-                 } else break;
-             }
+                     } else break;
+                 }
+            }
         }
 
         const auto& domTreeNodes = domInfo->getDomTree();
-        for (int childId : domTreeNodes[block->blockId]) {
-            if (id2block.count(childId)) rename(id2block[childId]);
+        if (block->blockId < domTreeNodes.size()) {
+            for (int childId : domTreeNodes[block->blockId]) {
+                if (id2block.count(childId)) rename(id2block[childId]);
+            }
         }
 
 
