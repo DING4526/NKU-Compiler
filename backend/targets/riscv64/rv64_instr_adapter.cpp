@@ -204,9 +204,47 @@ namespace BE::Targeting::RV64
                 return;
             case OpType::CALL:
                 // call/jal 会写 ra；返回值寄存器由调用约定定义
+                // Also, all caller-saved registers are clobbered by a call
                 out.push_back(PR::ra);
+                // a0-a7: argument/return registers (caller-saved)
                 out.push_back(PR::a0);
+                out.push_back(PR::a1);
+                out.push_back(PR::a2);
+                out.push_back(PR::a3);
+                out.push_back(PR::a4);
+                out.push_back(PR::a5);
+                out.push_back(PR::a6);
+                out.push_back(PR::a7);
+                // t0-t6: temporary registers (caller-saved)
+                out.push_back(PR::t0);
+                out.push_back(PR::t1);
+                out.push_back(PR::t2);
+                out.push_back(PR::t3);
+                out.push_back(PR::t4);
+                out.push_back(PR::t5);
+                out.push_back(PR::t6);
+                // fa0-fa7: float argument/return registers (caller-saved)
                 out.push_back(PR::fa0);
+                out.push_back(PR::fa1);
+                out.push_back(PR::fa2);
+                out.push_back(PR::fa3);
+                out.push_back(PR::fa4);
+                out.push_back(PR::fa5);
+                out.push_back(PR::fa6);
+                out.push_back(PR::fa7);
+                // ft0-ft11: float temporary registers (caller-saved)
+                out.push_back(PR::ft0);
+                out.push_back(PR::ft1);
+                out.push_back(PR::ft2);
+                out.push_back(PR::ft3);
+                out.push_back(PR::ft4);
+                out.push_back(PR::ft5);
+                out.push_back(PR::ft6);
+                out.push_back(PR::ft7);
+                out.push_back(PR::ft8);
+                out.push_back(PR::ft9);
+                out.push_back(PR::ft10);
+                out.push_back(PR::ft11);
                 return;
         }
     }

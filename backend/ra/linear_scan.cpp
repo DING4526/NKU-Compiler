@@ -317,16 +317,18 @@ namespace BE::RA
 
         for (auto& [r, iv] : intervals) iv.merge();
 
+        // Check crossesCall using the overall [start, end) range
+        // This is more conservative: if any callPoint falls within the overall range,
+        // we mark crossesCall=true, even if the vreg has holes in its live range.
         for (auto& [r, iv] : intervals)
         {
-            for (auto& seg : iv.segs)
+            if (iv.segs.empty()) continue;
+            int overallStart = iv.start();
+            int overallEnd = iv.end();
+            auto it = callPoints.lower_bound(overallStart);
+            if (it != callPoints.end() && *it < overallEnd)
             {
-                auto it = callPoints.lower_bound(seg.start);
-                if (it != callPoints.end() && *it < seg.end)
-                {
-                    iv.crossesCall = true;
-                    break;
-                }
+                iv.crossesCall = true;
             }
         }
 
@@ -485,28 +487,144 @@ namespace BE::RA
             return BE::Register();
         };
 
+        // Pre-compute live physical registers at each instruction position
+        // Key idea: for each basic block, compute which physical registers hold live values
+        // at the start of each instruction. This is based on the assigned physical registers
+        // and the original liveness information.
+
+        // Map: block -> vector of live phys regs at start of each instruction
+        std::map<BE::Block*, std::vector<std::set<int>>> livePhysAtInst;
+
         for (auto& [bid, block] : func.blocks)
         {
             if (!block) continue;
+            size_t numInsts = block->insts.size();
+            std::vector<std::set<int>> liveVec(numInsts + 1);  // +1 for after last inst
+
+            // Start with OUT[block] - vregs that are live out of the block
+            std::set<BE::Register> liveVregs = OUT[block];
+
+            // Convert to physical registers
+            for (auto& vr : liveVregs)
+            {
+                auto it = assignedPhys.find(vr);
+                if (it != assignedPhys.end() && it->second >= 0)
+                    liveVec[numInsts].insert(it->second);
+            }
+
+            // Process instructions in reverse order to compute live-in for each
+            int pos = static_cast<int>(numInsts) - 1;
+            for (auto it = block->insts.rbegin(); it != block->insts.rend(); ++it, --pos)
+            {
+                // Start with live regs from successor
+                std::set<int> livePhys = liveVec[pos + 1];
+
+                std::vector<BE::Register> uses, defs;
+                BE::Targeting::g_adapter->enumUses(*it, uses);
+                BE::Targeting::g_adapter->enumDefs(*it, defs);
+
+                // Remove defs - they are defined here, so not live before this instruction
+                for (auto& d : defs)
+                {
+                    if (!d.isVreg) continue;
+                    auto itA = assignedPhys.find(d);
+                    if (itA != assignedPhys.end() && itA->second >= 0)
+                        livePhys.erase(itA->second);
+                }
+
+                // Add uses - they must be live before this instruction
+                for (auto& u : uses)
+                {
+                    if (!u.isVreg) continue;
+                    auto itA = assignedPhys.find(u);
+                    if (itA != assignedPhys.end() && itA->second >= 0)
+                        livePhys.insert(itA->second);
+                }
+
+                liveVec[pos] = livePhys;
+            }
+
+            livePhysAtInst[block] = std::move(liveVec);
+        }
+
+        for (auto& [bid, block] : func.blocks)
+        {
+            if (!block) continue;
+
+            // Get pre-computed live physical registers for this block
+            auto liveIt = livePhysAtInst.find(block);
+            std::vector<std::set<int>> origLivePhys;
+            if (liveIt != livePhysAtInst.end())
+                origLivePhys = liveIt->second;
+
+            // Save original instructions and their indices for live info lookup
+            std::vector<BE::MInstruction*> origInsts(block->insts.begin(), block->insts.end());
+
+            size_t origIdx = 0;  // Index into original instruction list
             for (size_t idx = 0; idx < block->insts.size(); ++idx)
             {
                 auto it = block->insts.begin() + static_cast<std::ptrdiff_t>(idx);
                 auto* inst = *it;
                 if (!inst) continue;
 
+                // Skip reload/spill instructions that we inserted
+                // These are FILoadInst and FIStoreInst
+                bool isReloadOrSpill = (dynamic_cast<BE::FILoadInst*>(inst) != nullptr ||
+                                        dynamic_cast<BE::FIStoreInst*>(inst) != nullptr);
+                if (isReloadOrSpill)
+                    continue;
+
+                // Find this instruction in the original list to get correct origIdx
+                while (origIdx < origInsts.size() && origInsts[origIdx] != inst)
+                    origIdx++;
+
+                // Start with live physical registers at this position
                 std::set<int> usedPhys;
+                if (origIdx < origLivePhys.size())
+                {
+                    // Include all physical regs that are live at this instruction
+                    // This prevents scratch from clobbering values that will be used later
+                    usedPhys = origLivePhys[origIdx];
+                }
+
+                // Also add physical registers explicitly used by this instruction
                 {
                     std::vector<BE::Register> phys;
                     BE::Targeting::g_adapter->enumPhysRegs(inst, phys);
                     for (auto& r : phys) usedPhys.insert(static_cast<int>(r.rId));
                 }
 
+                // Collect all uses first to know which vregs are live through this instruction
+                std::vector<BE::Register> allUses;
+                BE::Targeting::g_adapter->enumUses(inst, allUses);
+
+                // Add physical registers for all uses that have allocated physical registers
+                // These are live at this point and cannot be used as scratch
+                for (auto& u : allUses)
+                {
+                    if (!u.isVreg) continue;
+                    auto itA = assignedPhys.find(u);
+                    if (itA != assignedPhys.end() && itA->second >= 0)
+                        usedPhys.insert(itA->second);
+                }
+
+                // Pre-collect physical registers that will be used by defs
+                // This prevents scratch registers from conflicting with def destinations
+                {
+                    std::vector<BE::Register> defs;
+                    BE::Targeting::g_adapter->enumDefs(inst, defs);
+                    for (auto& d : defs)
+                    {
+                        if (!d.isVreg) continue;
+                        auto itA = assignedPhys.find(d);
+                        if (itA != assignedPhys.end() && itA->second >= 0)
+                            usedPhys.insert(itA->second);
+                    }
+                }
+
                 // uses
                 {
-                    std::vector<BE::Register> uses;
-                    BE::Targeting::g_adapter->enumUses(inst, uses);
-
-                    for (auto& u : uses)
+                    for (auto& u : allUses)
                     {
                         if (!u.isVreg) continue;
 
