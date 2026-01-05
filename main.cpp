@@ -329,17 +329,26 @@ int main(int argc, char** argv)
              */
             // 下面这个 pass 可以作为参考，主要是示范如何通过cache获取分析pass的结果
             ME::TCOPass tcoPass;
+            tcoPass.runOnModule(m);
+        }
+
+        /*
+         * 基础规范化：即便在 -O0 下也执行必要的 SSA 规范化，避免后端在大量栈访存下暴露
+         * 不必要的寄存器分配/栈槽问题（opt=1 原有流程保持不变）。
+         */
+        {
             ME::UnifyReturnPass unifyReturnPass;
-            ME::Mem2RegPass mem2regpass;
+            ME::Mem2RegPass     mem2regpass;
+            unifyReturnPass.runOnModule(m);
+            mem2regpass.runOnModule(m);
+        }
+
+        if (optimizeLevel > 0)
+        {
             ME::CSEPass csepass;
             ME::ADCEPass adcepass;
             ME::ScalarLICMPass licmpass;
 
-            // Tail recursion elimination should run before UnifyReturn to keep
-            // the strict "call; ret" pattern intact.
-            tcoPass.runOnModule(m);
-            unifyReturnPass.runOnModule(m);
-            mem2regpass.runOnModule(m);
             csepass.runOnModule(m);
             licmpass.runOnModule(m);
             adcepass.runOnModule(m);
