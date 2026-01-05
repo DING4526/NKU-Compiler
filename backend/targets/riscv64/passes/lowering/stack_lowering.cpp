@@ -362,19 +362,41 @@ namespace BE::RV64::Passes::Lowering
                         ASSERT(off >= 0 && "Invalid frame object offset (did you register allocas?)");
 
                         // Replace abstract FI operand with concrete immediate.
-                        delete ri->fiop;
-                        ri->fiop    = nullptr;
-                        ri->use_ops = false;
-                        ri->imme    = off;
+                    delete ri->fiop;
+                    ri->fiop    = nullptr;
+                    ri->use_ops = false;
+                    ri->imme    = off;
 
-                        if (!imm12(off))
+                    if (!imm12(off))
+                    {
+                        // 偏移超出立即数范围：生成 li+add 计算地址，再使用 0 偏移访问
+                        std::vector<BE::MInstruction*> seq;
+                        seq.push_back(createUInst(Operator::LI, PR::t0, off));
+                        seq.push_back(createRInst(Operator::ADD, PR::t0, PR::sp, PR::t0));
+
+                        auto isStore = (ri->op == Operator::SW || ri->op == Operator::SD || ri->op == Operator::FSW ||
+                                        ri->op == Operator::FSD);
+                        if (isStore)
                         {
-                            // Same as above: require encodable offsets for now.
-                            ERROR("Frame object offset out of imm12 range: %d", off);
+                            seq.push_back(createSInst(ri->op, ri->rs1, PR::t0, 0));
                         }
+                        else
+                        {
+                            seq.push_back(createIInst(ri->op, ri->rd, PR::t0, 0));
+                        }
+
+                        BE::MInstruction::delInst(inst);
+                        it = block->insts.erase(it);
+                        for (auto* ni : seq)
+                        {
+                            it = block->insts.insert(it, ni);
+                            ++it;
+                        }
+                        --it;
                     }
                 }
             }
+        }
         }
     }
 }  // namespace BE::RV64::Passes::Lowering

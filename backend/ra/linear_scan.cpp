@@ -567,13 +567,6 @@ namespace BE::RA
                 auto* inst = *it;
                 if (!inst) continue;
 
-                // Skip reload/spill instructions that we inserted
-                // These are FILoadInst and FIStoreInst
-                bool isReloadOrSpill = (dynamic_cast<BE::FILoadInst*>(inst) != nullptr ||
-                                        dynamic_cast<BE::FIStoreInst*>(inst) != nullptr);
-                if (isReloadOrSpill)
-                    continue;
-
                 // Find this instruction in the original list to get correct origIdx
                 while (origIdx < origInsts.size() && origInsts[origIdx] != inst)
                     origIdx++;

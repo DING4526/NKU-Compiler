@@ -364,6 +364,9 @@ namespace BE::RV64
         int floatRegIdx = 0;   // 已使用的浮点寄存器数量
         int stackArgIdx = 0;   // 栈参数索引（从0开始）
 
+        std::vector<BE::MInstruction*> storeInsts;
+        std::vector<BE::MInstruction*> loadInsts;
+
         for (auto& [argTy, argOp] : ir_func->funcDef->argRegs)
         {
             if (!argOp || argOp->getType() != ME::OperandType::REG) continue;
@@ -381,7 +384,10 @@ namespace BE::RV64
                 {
                     // 浮点参数通过fa0-fa7传递
                     Register preg = PR::getPR(static_cast<uint32_t>(PR::Reg::f10) + static_cast<uint32_t>(floatRegIdx));
-                    entry->insts.push_front(createMove(new RegOperand(vreg), new RegOperand(preg), LOC_STR));
+                    preg.dt       = dt;
+                    int fi        = ctx_.mfunc->frameInfo.createSpillSlot(8, 8);
+                    storeInsts.push_back(new BE::FIStoreInst(preg, fi, "save_arg"));
+                    loadInsts.push_back(new BE::FILoadInst(vreg, fi, "load_arg"));
                     floatRegIdx++;
                 }
                 else
@@ -403,7 +409,10 @@ namespace BE::RV64
                 {
                     // 整数参数通过a0-a7传递
                     Register preg = PR::getPR(static_cast<uint32_t>(PR::Reg::x10) + static_cast<uint32_t>(intRegIdx));
-                    entry->insts.push_front(createMove(new RegOperand(vreg), new RegOperand(preg), LOC_STR));
+                    preg.dt       = dt;
+                    int fi        = ctx_.mfunc->frameInfo.createSpillSlot(8, 8);
+                    storeInsts.push_back(new BE::FIStoreInst(preg, fi, "save_arg"));
+                    loadInsts.push_back(new BE::FILoadInst(vreg, fi, "load_arg"));
                     intRegIdx++;
                 }
                 else
@@ -420,6 +429,9 @@ namespace BE::RV64
                 }
             }
         }
+
+        for (auto* inst : storeInsts) entry->insts.push_back(inst);
+        for (auto* inst : loadInsts) entry->insts.push_back(inst);
     }
 
     void DAGIsel::selectCopy(const DAG::SDNode* node, BE::Block* m_block)
