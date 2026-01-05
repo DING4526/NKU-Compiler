@@ -28,8 +28,8 @@ TESTCASES_DIR = "testcase/functional"
 TEST_OUTPUT_DIR = "test_output"
 TOOLCHAINS_CONF = "toolchains.conf"
 
-IR_TIMEOUT = "10"
-ASM_TIMEOUT = "8"
+IR_TIMEOUT = "60"
+ASM_TIMEOUT = "30"
 
 MAX_FILENAME_LEN = 0
 

@@ -68,9 +68,10 @@ namespace BE::RV64::Passes::Lowering
 
         // 收集函数中实际使用到的被调用者保存寄存器（在寄存器分配后运行）
         BE::Targeting::RV64::RegInfo regInfo;
-        std::set<int>                calleeInt(regInfo.calleeSavedIntRegs().begin(), regInfo.calleeSavedIntRegs().end());
-        std::set<int>                calleeFloat(regInfo.calleeSavedFloatRegs().begin(), regInfo.calleeSavedFloatRegs().end());
-        std::set<int>                usedCallee;
+        std::set<int> calleeInt(regInfo.calleeSavedIntRegs().begin(), regInfo.calleeSavedIntRegs().end());
+        std::set<int> calleeFloat(regInfo.calleeSavedFloatRegs().begin(), regInfo.calleeSavedFloatRegs().end());
+        std::set<int> usedCallee(calleeInt.begin(), calleeInt.end());
+        usedCallee.insert(calleeFloat.begin(), calleeFloat.end());
 
         for (auto& [bid, block] : func->blocks)
         {
@@ -180,6 +181,18 @@ namespace BE::RV64::Passes::Lowering
             // 其余被调用者保存寄存器（除 fp）
             if (!calleeSpillFI.empty())
             {
+                // 重新定位插入点：放在 set_fp 之后
+                auto insertPos = entry->insts.begin();
+                for (; insertPos != entry->insts.end(); ++insertPos)
+                {
+                    auto* ri = dynamic_cast<BE::RV64::Instr*>(*insertPos);
+                    if (ri && ri->comment == "set_fp")
+                    {
+                        ++insertPos;
+                        break;
+                    }
+                }
+
                 std::vector<int> ordered;
                 ordered.reserve(calleeSpillFI.size());
                 for (auto& [id, _] : calleeSpillFI) ordered.push_back(id);
@@ -189,8 +202,8 @@ namespace BE::RV64::Passes::Lowering
                 {
                     auto* store = new BE::FIStoreInst(BE::RV64::PR::getPR(static_cast<uint32_t>(id)), calleeSpillFI[id],
                         "save_callee");
-                    it = entry->insts.insert(it, store);
-                    ++it;
+                    insertPos = entry->insts.insert(insertPos, store);
+                    ++insertPos;
                 }
             }
         }
