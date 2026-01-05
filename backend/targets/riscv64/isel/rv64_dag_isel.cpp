@@ -1040,6 +1040,63 @@ namespace BE::RV64
         int usedFloatRegs = 0;
         int stackArgIdx   = 0;  // each stack arg uses 8 bytes slot
 
+        auto materializePointerLikeTo = [&](const DAG::SDNode* n, Register dest) -> bool {
+            if (!n) return false;
+            auto op = static_cast<DAG::ISD>(n->getOpcode());
+
+            auto emitFIAddr = [&](int fi, int extraOff = 0) {
+                Instr* addrInst = createIInst(Operator::ADDI, dest, PR::sp, extraOff);
+                addrInst->fiop  = new FrameIndexOperand(fi);
+                addrInst->use_ops = true;
+                m_block->insts.push_back(addrInst);
+                return true;
+            };
+
+            if (op == DAG::ISD::FRAME_INDEX) return emitFIAddr(n->getFrameIndex());
+
+            if (op == DAG::ISD::REG && n->hasIRRegId())
+            {
+                auto it = ctx_.allocaFI.find(n->getIRRegId());
+                if (it != ctx_.allocaFI.end()) return emitFIAddr(it->second);
+            }
+
+            if (op == DAG::ISD::ADD)
+            {
+                const DAG::SDNode* lhs = n->getOperand(0).getNode();
+                const DAG::SDNode* rhs = n->getOperand(1).getNode();
+                if (!lhs || !rhs) return false;
+                const DAG::SDNode* base = nullptr;
+                int64_t            off  = 0;
+                if ((static_cast<DAG::ISD>(rhs->getOpcode()) == DAG::ISD::CONST_I32 ||
+                        static_cast<DAG::ISD>(rhs->getOpcode()) == DAG::ISD::CONST_I64) &&
+                    rhs->hasImmI64())
+                {
+                    base = lhs;
+                    off  = rhs->getImmI64();
+                }
+                else if ((static_cast<DAG::ISD>(lhs->getOpcode()) == DAG::ISD::CONST_I32 ||
+                             static_cast<DAG::ISD>(lhs->getOpcode()) == DAG::ISD::CONST_I64) &&
+                         lhs->hasImmI64())
+                {
+                    base = rhs;
+                    off  = lhs->getImmI64();
+                }
+
+                if (base)
+                {
+                    if (static_cast<DAG::ISD>(base->getOpcode()) == DAG::ISD::FRAME_INDEX)
+                        return emitFIAddr(base->getFrameIndex(), static_cast<int>(off));
+                    if (static_cast<DAG::ISD>(base->getOpcode()) == DAG::ISD::REG && base->hasIRRegId())
+                    {
+                        auto it = ctx_.allocaFI.find(base->getIRRegId());
+                        if (it != ctx_.allocaFI.end()) return emitFIAddr(it->second, static_cast<int>(off));
+                    }
+                }
+            }
+
+            return false;
+        };
+
         for (size_t i = 2; i < node->getNumOperands(); ++i)
         {
             const DAG::SDNode* arg = node->getOperand(i).getNode();
@@ -1091,6 +1148,10 @@ namespace BE::RV64
                     auto aop = static_cast<DAG::ISD>(arg->getOpcode());
                     if ((aop == DAG::ISD::CONST_I32 || aop == DAG::ISD::CONST_I64) && arg->hasImmI64())
                         m_block->insts.push_back(createMove(new RegOperand(preg), static_cast<int>(arg->getImmI64()), LOC_STR));
+                    else if (materializePointerLikeTo(arg, preg))
+                    {
+                        // address already materialized into preg
+                    }
                     else
                     {
                         Register areg = getOperandReg(arg, m_block);
@@ -1104,7 +1165,9 @@ namespace BE::RV64
                     ctx_.mfunc->frameInfo.setParamAreaSize(offset + 8);
                     ctx_.mfunc->paramSize = ctx_.mfunc->frameInfo.getParamAreaSize();
 
-                    Register areg = getOperandReg(arg, m_block);
+                    Register areg;
+                    if (!materializePointerLikeTo(arg, (areg = getVReg(BE::I64))))
+                        areg = getOperandReg(arg, m_block);
                     Operator sop = (argTy == BE::I64 || argTy == BE::PTR) ? Operator::SD : Operator::SW;
                     if (!imm12(offset))
                     {
