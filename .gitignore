@@ -31,10 +31,3 @@ result
 a.outtmp.bin
 tmp.bin
 a.out
-
-# Test case outputs
-*_*.bin
-*_*.o
-*_*.s
-*_*.ll
-*_*.out

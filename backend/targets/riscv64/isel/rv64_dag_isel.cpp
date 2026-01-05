@@ -194,9 +194,7 @@ namespace BE::RV64
         if (opcode == DAG::ISD::SYMBOL && node->hasSymbol())
         {
             Register addrReg = getVReg(BE::I64);
-            // 为全局变量名添加前缀，避免与 RISC-V 寄存器名（如 a0-a7）冲突
-            std::string safeName = "_global_" + std::string(node->getSymbol());
-            Label    symbolLabel(safeName, false, true);
+            Label    symbolLabel(node->getSymbol(), false, true);
             m_block->insts.push_back(createUInst(Operator::LA, addrReg, symbolLabel));
             return addrReg;
         }
@@ -262,9 +260,7 @@ namespace BE::RV64
             if (!g) continue;
 
             BE::DataType* ty = mapMEType(g->dt);
-            // 为全局变量名添加前缀，避免与 RISC-V 寄存器名（如 a0-a7）冲突
-            std::string safeName = "_global_" + g->name;
-            auto*         gv = new BE::GlobalVariable(ty, safeName);
+            auto*         gv = new BE::GlobalVariable(ty, g->name);
 
             if (!g->initList.arrayDims.empty()) gv->dims = g->initList.arrayDims;
 
@@ -350,16 +346,12 @@ namespace BE::RV64
     void DAGIsel::setupParameters(ME::Function* ir_func)
     {
         // ============================================================================
-        // 为函数参数创建虚拟寄存器
+        // 为函数参数创建虚拟寄存器并生成参数接收代码
         // ============================================================================
         //
-        // 作用：
-        // 遍历 IR 函数定义中的所有参数，为每个参数分配虚拟寄存器，并记录参数的虚拟寄存器映射关系
-        // 
-        // 调用约定：
-        // - 前8个整数参数通过 a0-a7 (x10-x17) 传递
-        // - 前8个浮点参数通过 fa0-fa7 (f10-f17) 传递
-        // - 超出的参数通过栈传递，位于调用者的 SP 位置（即 callee 的 FP + stackSize）
+        // 修复说明：
+        // 1. 对于寄存器参数：直接从参数寄存器拷贝到虚拟寄存器
+        // 2. 对于栈参数：记录到stackParams列表中，稍后由stack_lowering统一处理
 
         if (!ir_func || !ir_func->funcDef || !ctx_.mfunc) return;
         if (ctx_.mfunc->blocks.empty()) return;
@@ -368,8 +360,9 @@ namespace BE::RV64
         BE::Block* entry = ctx_.mfunc->blocks.begin()->second;
         if (!entry) return;
 
-        int intIdx   = 0;
-        int floatIdx = 0;
+        int intRegIdx   = 0;   // 已使用的整数寄存器数量
+        int floatRegIdx = 0;   // 已使用的浮点寄存器数量
+        int stackArgIdx = 0;   // 栈参数索引（从0开始）
 
         for (auto& [argTy, argOp] : ir_func->funcDef->argRegs)
         {
@@ -381,51 +374,50 @@ namespace BE::RV64
             ctx_.mfunc->params.push_back(vreg);
 
             bool isFloat = (dt == BE::F32 || dt == BE::F64);
+            
             if (isFloat)
             {
-                if (floatIdx < 8)
+                if (floatRegIdx < 8)
                 {
-                    Register preg = PR::getPR(static_cast<uint32_t>(PR::Reg::f10) + static_cast<uint32_t>(floatIdx));
+                    // 浮点参数通过fa0-fa7传递
+                    Register preg = PR::getPR(static_cast<uint32_t>(PR::Reg::f10) + static_cast<uint32_t>(floatRegIdx));
                     entry->insts.push_front(createMove(new RegOperand(vreg), new RegOperand(preg), LOC_STR));
+                    floatRegIdx++;
                 }
                 else
                 {
-                    // 浮点栈参数：从 FP + stackSize + (floatIdx - 8) * 8 加载
+                    // 浮点参数通过栈传递，记录信息
                     ctx_.mfunc->hasStackParam = true;
-                    int stackParamIdx = floatIdx - 8;
-                    // 生成加载指令：使用占位符偏移 -1，StackLowering 会修正为 stackSize + stackParamIdx * 8
-                    auto* loadInst = BE::RV64::createIInst_impl(
-                        (dt == BE::F64) ? Operator::FLD : Operator::FLW,
-                        vreg,
-                        PR::fp,
-                        -1,  // 占位符：StackLowering 将修正此偏移
-                        "load_stack_param_" + std::to_string(stackParamIdx));
-                    entry->insts.push_front(loadInst);
+                    BE::StackParamInfo info;
+                    info.vreg = vreg;
+                    info.argIndex = stackArgIdx;
+                    info.dt = dt;
+                    ctx_.mfunc->stackParams.push_back(info);
+                    stackArgIdx++;
+                    floatRegIdx++;
                 }
-                floatIdx++;
             }
             else
             {
-                if (intIdx < 8)
+                if (intRegIdx < 8)
                 {
-                    Register preg = PR::getPR(static_cast<uint32_t>(PR::Reg::x10) + static_cast<uint32_t>(intIdx));
+                    // 整数参数通过a0-a7传递
+                    Register preg = PR::getPR(static_cast<uint32_t>(PR::Reg::x10) + static_cast<uint32_t>(intRegIdx));
                     entry->insts.push_front(createMove(new RegOperand(vreg), new RegOperand(preg), LOC_STR));
+                    intRegIdx++;
                 }
                 else
                 {
-                    // 整数栈参数：从 FP + stackSize + (intIdx - 8) * 8 加载
+                    // 整数参数通过栈传递，记录信息
                     ctx_.mfunc->hasStackParam = true;
-                    int stackParamIdx = intIdx - 8;
-                    // 生成加载指令：使用占位符偏移 -1，StackLowering 会修正为 stackSize + stackParamIdx * 8
-                    auto* loadInst = BE::RV64::createIInst_impl(
-                        (dt == BE::I64 || dt == BE::PTR) ? Operator::LD : Operator::LW,
-                        vreg,
-                        PR::fp,
-                        -1,  // 占位符：StackLowering 将修正此偏移
-                        "load_stack_param_" + std::to_string(stackParamIdx));
-                    entry->insts.push_front(loadInst);
+                    BE::StackParamInfo info;
+                    info.vreg = vreg;
+                    info.argIndex = stackArgIdx;
+                    info.dt = dt;
+                    ctx_.mfunc->stackParams.push_back(info);
+                    stackArgIdx++;
+                    intRegIdx++;
                 }
-                intIdx++;
             }
         }
     }
@@ -730,10 +722,8 @@ namespace BE::RV64
             else if (static_cast<DAG::ISD>(baseNode->getOpcode()) == DAG::ISD::SYMBOL && baseNode->hasSymbol())
             {
                 std::string symbol = baseNode->getSymbol();
-                // 为全局变量名添加前缀，避免与 RISC-V 寄存器名冲突
-                std::string safeName = "_global_" + symbol;
                 baseReg            = getVReg(BE::I64);
-                Label symbolLabel(safeName, false, true);
+                Label symbolLabel(symbol, false, true);
                 m_block->insts.push_back(createUInst(Operator::LA, baseReg, symbolLabel));
             }
             else
@@ -809,9 +799,7 @@ namespace BE::RV64
             else if (static_cast<DAG::ISD>(baseNode->getOpcode()) == DAG::ISD::SYMBOL && baseNode->hasSymbol())
             {
                 baseReg = getVReg(BE::I64);
-                // 为全局变量名添加前缀，避免与 RISC-V 寄存器名冲突
-                std::string safeName = "_global_" + std::string(baseNode->getSymbol());
-                Label symbolLabel(safeName, false, true);
+                Label symbolLabel(baseNode->getSymbol(), false, true);
                 m_block->insts.push_back(createUInst(Operator::LA, baseReg, symbolLabel));
             }
             else

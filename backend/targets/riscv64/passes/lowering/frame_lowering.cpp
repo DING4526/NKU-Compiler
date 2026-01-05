@@ -72,11 +72,60 @@ namespace BE::RV64::Passes::Lowering
         entry->insts.push_front(BE::RV64::createIInst_impl(
             BE::RV64::Operator::ADDI, BE::RV64::PR::sp, BE::RV64::PR::sp, 0, "prologue_sp"));
 
+        // 插入栈参数加载的占位指令
+        // 注意：这里还不知道stackSize，所以插入使用虚拟寄存器的指令
+        // 实际的偏移计算将在stack_lowering中完成
+        // 但由于我们需要使用sp+stackSize+offset，而stackSize在这里未知
+        // 我们插入临时的加载指令，使用一个特殊的标记
+        //
+        // 更好的方案：使用一个新的伪指令 StackArgLoadPseudoInst
+        // 但由于时间限制，我们直接在这里生成真实指令，使用占位offset
+        // stack_lowering将patch这些指令
+        if (func->hasStackParam && !func->stackParams.empty())
+        {
+            // 在prologue之后插入栈参数加载
+            // 这些指令使用虚拟寄存器，将由RA处理
+            auto it = entry->insts.begin();
+            ++it; // skip prologue_sp
+            
+            for (const auto& paramInfo : func->stackParams)
+            {
+                // 创建一个临时的加载指令
+                // 使用comment标记为需要patch偏移的指令
+                BE::RV64::Operator loadOp;
+                if (paramInfo.dt == BE::F32)
+                    loadOp = BE::RV64::Operator::FLW;
+                else if (paramInfo.dt == BE::F64)
+                    loadOp = BE::RV64::Operator::FLD;
+                else if (paramInfo.dt == BE::I64 || paramInfo.dt == BE::PTR)
+                    loadOp = BE::RV64::Operator::LD;
+                else
+                    loadOp = BE::RV64::Operator::LW;
+                
+                // 使用占位offset=0，并标记comment，stack_lowering将patch它
+                auto* loadInst = BE::RV64::createIInst_impl(loadOp, paramInfo.vreg, BE::RV64::PR::sp, 0,
+                    "stack_arg_load_" + std::to_string(paramInfo.argIndex));
+                it = entry->insts.insert(it, loadInst);
+                ++it;
+            }
+        }
+
         if (raSaveFI >= 0)
         {
             // Save ra after stack allocation (offsets are based on SP after prologue).
             auto it = entry->insts.begin();
             ++it;  // after prologue_sp
+            // Skip stack param loads
+            while (it != entry->insts.end())
+            {
+                auto* ri = dynamic_cast<BE::RV64::Instr*>(*it);
+                if (ri && ri->comment.find("stack_arg_load_") == 0)
+                {
+                    ++it;
+                    continue;
+                }
+                break;
+            }
             entry->insts.insert(it, new BE::FIStoreInst(BE::RV64::PR::ra, raSaveFI, "save_ra"));
         }
 
