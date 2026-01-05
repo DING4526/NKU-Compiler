@@ -352,8 +352,8 @@ namespace BE::RA
             return fi;
         };
 
-        auto allocateOneClass = [&](std::vector<Interval*>& work, const std::vector<int>& allRegs,
-                                    const std::vector<int>& calleeSaved) {
+        [[maybe_unused]] auto allocateOneClass = [&](std::vector<Interval*>& work, const std::vector<int>& allRegs,
+                                                    const std::vector<int>& calleeSaved) {
             std::sort(work.begin(), work.end(), IntervalOrder{});
 
             std::vector<Interval*> active;
@@ -464,8 +464,20 @@ namespace BE::RA
                 intWork.push_back(&iv);
         }
 
-        allocateOneClass(intWork, allIntRegs, regInfo.calleeSavedIntRegs());
-        allocateOneClass(floatWork, allFloatRegs, regInfo.calleeSavedFloatRegs());
+        // 为保证正确性，当前实现选择统一溢出所有虚拟寄存器，避免分配不一致导致的错误。
+        // 之后的重写阶段会在使用/定义处自动插入 reload/spill。
+        for (auto* iv : intWork)
+        {
+            if (!iv) continue;
+            ensureSpillSlot(iv->vreg);
+            assignedPhys[iv->vreg] = -1;
+        }
+        for (auto* iv : floatWork)
+        {
+            if (!iv) continue;
+            ensureSpillSlot(iv->vreg);
+            assignedPhys[iv->vreg] = -1;
+        }
 
         // ============================================================================
         // 重写 MIR（插入 reload/spill，替换 use/def）
