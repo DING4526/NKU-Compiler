@@ -262,6 +262,44 @@ namespace BE::RV64::Passes::Lowering
 
                 if (auto* ri = dynamic_cast<BE::RV64::Instr*>(inst))
                 {
+                    // 修正栈参数加载指令的偏移
+                    // 这些指令在 setupParameters 中生成，使用占位符偏移 -1
+                    // 需要修正为: stackSize + paramIdx * 8
+                    if (ri->comment.find("load_stack_param_") == 0 && ri->imme == -1)
+                    {
+                        // 提取参数索引
+                        std::string prefix = "load_stack_param_";
+                        int paramIdx = std::stoi(ri->comment.substr(prefix.length()));
+                        
+                        // 栈参数位于 FP + stackSize + paramIdx * 8
+                        // FP 在 prologue 后被设置为 SP，所以相对于当前 SP 的偏移就是 stackSize + paramIdx * 8
+                        int offset = func->stackSize + paramIdx * 8;
+                        
+                        if (imm12(offset))
+                        {
+                            // 直接使用立即数偏移
+                            ri->imme = offset;
+                        }
+                        else
+                        {
+                            // 偏移超范围：li t0, offset; add t0, fp, t0; lw/ld rd, 0(t0)
+                            std::vector<BE::MInstruction*> seq;
+                            seq.push_back(createUInst(Operator::LI, PR::t0, offset));
+                            seq.push_back(createRInst(Operator::ADD, PR::t0, PR::fp, PR::t0));
+                            seq.push_back(createIInst(ri->op, ri->rd, PR::t0, 0));
+                            
+                            BE::MInstruction::delInst(inst);
+                            it = block->insts.erase(it);
+                            for (auto* ni : seq)
+                            {
+                                it = block->insts.insert(it, ni);
+                                ++it;
+                            }
+                            --it;
+                        }
+                        continue;
+                    }
+
                     // Patch frame prologue/epilogue stack pointer adjustments.
                     // 当栈大小超过 12 位立即数范围时，需要替换为多条指令
                     if (ri->op == BE::RV64::Operator::ADDI && ri->rd == BE::RV64::PR::sp && ri->rs1 == BE::RV64::PR::sp)

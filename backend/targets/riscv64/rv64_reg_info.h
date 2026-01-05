@@ -28,9 +28,10 @@ namespace BE::Targeting::RV64
             calleeSavedInt_   = {8, 9, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27};
             calleeSavedFloat_ = {40, 41, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59};
 
-            // Reserve fixed registers: zero/sp/gp/tp/ra.
+            // Reserve fixed registers: zero/sp/gp/tp/ra/fp.
             // Keeping ra reserved avoids allocating vregs to ra (call/ret semantics).
-            reserved_ = {0, 1, 2, 3, 4, 8};  // also reserve fp (x8) as dedicated frame pointer
+            // Reserve t0-t2 (x5-x7) for use by lowering passes (address calculation, etc.)
+            reserved_ = {0, 1, 2, 3, 4, 5, 6, 7, 8};  // x0, x1, x2, x3, x4, x5, x6, x7, x8
 
             // All integer regs (x0-x31)
             intRegs_.clear();
